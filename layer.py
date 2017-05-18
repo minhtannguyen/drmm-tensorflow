@@ -270,7 +270,315 @@ class Layer():
 			self.params.append(self.alpha_dn)
 			self.params.append(self.b_dn)
 
+	def get_important_latents_BU(self, input, betas):
+		##################################################################################
+		# This function is used in the _E_step_Bottom_Up to compute latent representations
+		#
+		# Return:
+		# latents_before_BN: activations after convolutions
+		# latents: activations after BatchNorm/DivNorm
+		# max_over_a_mask: masking tensor results from ReLU
+		# max_over_t_mask: masking tensor results from max-pooling
+		# latents_masked: activations after BatchNorm/DivNorm masked by a and t
+		# masked_mat: max_over_t_mask * max_over_a_mask
+		# output: output of the layer, a.k.a. the downsampled activations
+		# mask_input: the input masked by the ReLU
+		# scale_s: the scale latent variable in DivNorm
+		# latents_demeaned: activations after convolutions whose means are removed
+		# latents_demeaned_squared: (activations after convolutions whose means are removed)^2
+		##################################################################################
+		# compute the activations after convolutions
+		latents_before_BN = tf.nn.conv2d(
+			input=input,
+			filters=betas,
+			padding=self.border_mode
+		)
+
+		# do batch normalization or divisive normalization
+		if self.is_bn_BU: # do batch normalization
+			latents_after_BN = self.bn_BU.get_result(input=latents_before_BN, input_shape=self.latents_shape)
+			scale_s = tf.ones(latents_before_BN.get_shape().to_list())
+			latents_demeaned = latents_before_BN
+			latents_demeaned_squared = latents_demeaned ** 2
+		elif self.is_dn: # do divisive normalization
+			filter_for_norm_local = tf.Variable(tf.ones((1, self.K, self.h, self.w), dtype=tf.float32), name='filter_norm_local')
+
+			sum_local = tf.nn.conv2d(
+				input=latents_before_BN,
+				filters=filter_for_norm_local,
+				padding='half'
+			)
+
+			mean_local = sum_local/(self.K*self.h*self.w)
+# ---------
+			latents_demeaned = latents_before_BN - T.repeat(mean_local, self.K,  axis=1)
+
+			latents_demeaned_squared = latents_demeaned**2
+
+			norm_local = tf.nn.conv2d(
+				input=latents_demeaned_squared,
+				filters=filter_for_norm_local,
+				padding='half'
+			)
+
+			scale_s = (T.repeat((self.alpha_dn + 1e-10), self.K).transpose('x', 0, 'x', 'x')
+					   + T.repeat(norm_local / (self.K * self.h * self.w), self.K, axis=1)/((T.repeat((self.sigma_dn + 1e-5), self.K).transpose('x', 0, 'x', 'x')) ** 2)) / 2.
+
+			latents_after_BN = (latents_demeaned / T.sqrt(scale_s)) + T.repeat(self.b_dn, self.K).transpose('x', 0, 'x', 'x')
+# --------------
+		else:
+			latents_after_BN = latents_before_BN
+			scale_s = tf.ones(latents_before_BN.get_shape())
+			latents_demeaned = latents_before_BN
+			latents_demeaned_squared = latents_demeaned ** 2
+
+		latents = latents_after_BN * self.prun_mat # masking the activations by the neuron pruning mask.
+													# self.prun_mat is all 1's if no neuron pruning
+
+		mask_input = tf.cast(tf.greater(input, 0.), tf.float32) # find positive elements in the input
+
+		# find activations survive after max over a
+		if self.pool_a_mode == 'relu':
+			max_over_a_mask = tf.cast(tf.greater(latents, 0.), tf.float32)
+		else:
+			max_over_a_mask = tf.cast(tf.ones(latents.get_shape()), tf.float32)
+# ---------------
+		# find activations survive after max over t
+		if self.pool_t_mode == 'max_t' and self.nonlin == 'relu':
+			max_over_t_mask = T.grad(
+				T.sum(pool.pool_2d(input=latents, ds=(2, 2), ignore_border=True, mode='max')),
+				wrt=latents)  # argmax across t
+			max_over_t_mask = T.cast(max_over_t_mask, theano.config.floatX)
+		elif self.pool_t_mode == 'max_t' and self.nonlin == 'abs': # still in the beta state
+			latents_abs = T.abs_(latents)
+			max_over_t_mask = T.grad(
+				T.sum(pool.pool_2d(input=latents_abs, ds=(2, 2), ignore_border=True, mode='max')),
+				wrt=latents_abs)  # argmax across t
+			max_over_t_mask = tf.cast(max_over_t_mask, tf.float32)
+		else:
+			max_over_t_mask = tf.cast(tf.ones(latents.get_shape()), tf.float32)
+# ---------------------
+		# mask the activations by t and a
+		if self.nonlin == 'relu':
+			latents_masked = tf.nn.relu(latents) * max_over_t_mask  # * max_over_a_mask
+		elif self.nonlin == 'abs':
+			latents_masked = tf.abs(latents) * max_over_t_mask
+		else:
+			latents_masked = latents * max_over_t_mask
+
+		# find activations survive after max over a and t
+		masked_mat = max_over_t_mask * max_over_a_mask  # * max_over_a_mask
+# ----------------------------
+		# downsample the activations
+		if self.pool_t_mode == 'max_t':
+			output = pool.pool_2d(input=latents_masked, ds=(2, 2),
+								  ignore_border=True, mode='average_exc_pad')
+			output = output * 4.0
+		elif self.pool_t_mode == 'mean_t':
+			output = pool.pool_2d(input=latents_masked, ds=self.mean_pool_size,
+								  ignore_border=True, mode='average_exc_pad')
+		else:
+			output = latents_masked
+# -------------------------
+		return latents_before_BN, latents, max_over_a_mask, max_over_t_mask, latents_masked, masked_mat, output, mask_input, scale_s, latents_demeaned, latents_demeaned_squared
+
 
 	def EBottomUp(self, args):
-		
+		"""
+		E-step bottom-up infers the latents in the images
+		"""
+
+		# reshape lambdas into the filters
+		self.betas = tf.transpose(self.lambdas, [0, 2, 1])
+		betas = tf.reshape(self.betas[:, 0, :], shape=(self.K, self.Cin, self.h, self.w))
+		betas = betas * self.prun_synap_mat
+
+		# run bottom up for labeled examples.
+		if self.is_bn_BU:
+			if self.data_4D_lab is not None and self.data_4D_unl_clean is None: # supervised training mode
+				self.bn_BU.set_runmode(0)
+			elif self.data_4D_lab is not None and self.data_4D_unl_clean is not None: # semisupervised training mode
+				if self.update_mean_var_with_sup:
+					self.bn_BU.set_runmode(0)
+				else:
+					self.bn_BU.set_runmode(1)
+
+		[self.latents_before_BN_lab, self.latents_lab, self.max_over_a_mask_lab,
+		 self.max_over_t_mask_lab, self.latents_masked_lab, self.masked_mat_lab, self.output_lab, self.mask_input_lab, self.scale_s_lab,
+		 self.latents_demeaned_lab, self.latents_demeaned_squared_lab] \
+			= self.get_important_latents_BU(input=self.data_4D_lab, betas=betas)
+
+		if self.is_noisy: # run bottom up for unlabeled data when noise is added
+			if self.data_4D_unl is not None:
+				if self.is_bn_BU:
+					self.bn_BU.set_runmode(1)  # no update of means and vars
+				[self.latents_before_BN, self.latents, self.max_over_a_mask, self.max_over_t_mask, self.latents_masked, self.masked_mat,
+				 self.output, self.mask_input, self.scale_s, self.latents_demeaned, self.latents_demeaned_squared] \
+					= self.get_important_latents_BU(input=self.data_4D_unl, betas=betas)
+
+			if self.data_4D_unl_clean is not None:
+				if self.is_bn_BU:
+					self.bn_BU.set_runmode(0)  # using clean data to keep track the means and the vars
+				[self.latents_before_BN_clean, self.latents_clean, self.max_over_a_mask_clean, self.max_over_t_mask_clean, self.latents_masked_clean,
+				 self.masked_mat_clean, self.output_clean, self.mask_input_clean, self.scale_s_clean,
+				 self.latents_demeaned_clean, self.latents_demeaned_squared_clean] \
+					= self.get_important_latents_BU(input=self.data_4D_unl_clean, betas=betas)
+
+		else: # run bottom up for unlabeled data when there is no noise
+			if self.data_4D_unl is not None:
+				if self.is_bn_BU:
+					if self.update_mean_var_with_sup:
+						self.bn_BU.set_runmode(1) # using clean data to keep track the means and vars
+					else:
+						self.bn_BU.set_runmode(0)  # using clean data to keep track the means and vars
+
+				[self.latents_before_BN, self.latents, self.max_over_a_mask, self.max_over_t_mask, self.latents_masked, self.masked_mat,
+				 self.output, self.mask_input, self.scale_s, self.latents_demeaned, self.latents_demeaned_squared] \
+					= self.get_important_latents_BU(input=self.data_4D_unl, betas=betas)
+				self.output_clean = self.output
+
+		if self.data_4D_unl is not None:
+			self.pi_t_minibatch = tf.reduce_mean(self.max_over_t_mask, axis=0)
+			self.pi_a_minibatch = tf.reduce_mean(self.max_over_a_mask, axis=0)
+			self.pi_ta_minibatch = tf.reduce_mean(self.masked_mat, axis=0)
+			self.pi_t_new = self.momentum_pi_t * self.pi_t + (1. - self.momentum_pi_t) * self.pi_t_minibatch
+			self.pi_a_new = self.momentum_pi_a*self.pi_a + (1 - self.momentum_pi_a)*self.pi_a_minibatch
+			self.pi_ta_new = self.momentum_pi_ta * self.pi_ta + (1. - self.momentum_pi_ta) * self.pi_ta_minibatch
+
+			if self.is_prun_synap:
+				padded_mask_input, padded_shape = self.pad_images(images=self.mask_input.transpose(1, 0, 2, 3),
+																  image_shape=(self.Cin, self.Ni, self.H, self.W),
+																  filter_size=(self.h, self.w),
+																  border_mode=self.border_mode)
+
+				pi_synap_minibatch = tf.nn.conv2d(input=padded_mask_input,
+										   filters=self.max_over_a_mask.transpose(1, 0, 2, 3),
+										   padding='valid')
+
+			self.pi_synap_minibatch = tf.cast(T.unbroadcast(pi_synap_minibatch, 0).transpose(1, 0, 2, 3)
+														 /np.float32(self.Ni*self.latents_shape[2]*self.latents_shape[3]), tf.float32)
+# --
+			self.amps_new = T.sum(self.masked_mat, axis=(0, 2, 3)) / np.float32(self.N / 4.0)
+
+		else: # if supervised learning, compute the pi_synap from each minibatch using labeled data
+			self.pi_t_minibatch = tf.reduce_mean(self.max_over_t_mask_lab, axis=0)
+			self.pi_a_minibatch = tf.reduce_mean(self.max_over_a_mask_lab, axis=0)
+			self.pi_ta_minibatch = T.mean(self.masked_mat_lab, axis=0)
+			self.pi_t_new = self.momentum_pi_t * self.pi_t + (1 - self.momentum_pi_t) * self.pi_t_minibatch
+			self.pi_a_new = self.momentum_pi_a * self.pi_a + (1 - self.momentum_pi_a) * self.pi_a_minibatch
+			self.pi_ta_new = self.momentum_pi_ta * self.pi_ta + (1 - self.momentum_pi_ta) * self.pi_ta_minibatch
+
+			if self.is_prun_synap:
+				padded_mask_input, padded_shape = self.pad_images(images=self.mask_input_lab.transpose(1, 0, 2, 3),
+																  image_shape=(self.Cin, self.Ni, self.H, self.W),
+																  filter_size=(self.h, self.w),
+																  border_mode=self.border_mode)
+
+				pi_synap_minibatch = tf.nn.conv2d(input=padded_mask_input,
+											filters=self.max_over_a_mask_lab.transpose(1, 0, 2, 3),
+											padding='valid')
+# ---
+				self.pi_synap_minibatch = tf.cast(T.unbroadcast(pi_synap_minibatch, 0).transpose(1, 0, 2, 3)
+										   / np.float32(self.Ni * self.latents_shape[2] * self.latents_shape[3]),
+										   theano.config.floatX)
+
+			self.amps_new = tf.reduce_sum(self.masked_mat_lab, axis=(0, 2, 3)) / np.float32(self.N / 4.0)
+
 	def ETopDown(self, args):
+		#
+		# Reconstruct the images to compute the complete-data log-likelihood
+		#
+
+		# Up-sample the latent presentations
+		if self.pool_t_mode == 'max_t':
+			self.latents_unpooled_no_mask = mu_cg.repeat(2, axis=2).repeat(2, axis=3)
+			self.latents_unpooled_no_mask_lab = mu_cg_lab.repeat(2, axis=2).repeat(2, axis=3)
+		elif self.pool_t_mode == 'mean_t':
+			self.latents_unpooled_no_mask = mu_cg.repeat(self.mean_pool_size[0], axis=2).repeat(self.mean_pool_size[1], axis=3)
+			self.latents_unpooled_no_mask_lab = mu_cg_lab.repeat(self.mean_pool_size[0], axis=2).repeat(self.mean_pool_size[1],
+																								axis=3)
+		elif self.pool_t_mode is None:
+			self.latents_unpooled_no_mask = mu_cg
+			self.latents_unpooled_no_mask_lab = mu_cg_lab
+		else:
+			raise
+
+		# apply the a and t infered in the E-step bottom-up inference on the up-sampled intermediate image
+		self.latents_unpooled = self.latents_unpooled_no_mask * self.masked_mat * self.prun_mat
+		self.latents_unpooled_lab = self.latents_unpooled_no_mask_lab * self.masked_mat_lab * self.prun_mat
+
+		# reconstruct/sample the image
+		self.lambdas_deconv = (tf.reshape(self.lambdas[:, :, 0],
+										 shape=(self.K, self.Cin, self.h, self.w)) * self.prun_synap_mat).transpose(1, 0, 2, 3)
+		self.lambdas_deconv = self.lambdas_deconv[:, :, ::-1, ::-1]
+
+		if self.border_mode == 'valid':
+			self.data_reconstructed = tf.nn.conv2d(
+				input=self.latents_unpooled,
+				filters=self.lambdas_deconv,
+				padding='full'
+			)
+			self.data_reconstructed_lab = tf.nn.conv2d(
+				input=self.latents_unpooled_lab,
+				filters=self.lambdas_deconv,
+				padding='full'
+			)
+
+		elif self.border_mode == 'half':
+			self.data_reconstructed = tf.nn.conv2d(
+				input=self.latents_unpooled,
+				filters=self.lambdas_deconv,
+				padding='half'
+			)
+			self.data_reconstructed_lab = tf.nn.conv2d(
+				input=self.latents_unpooled_lab,
+				filters=self.lambdas_deconv,
+				padding='half'
+			)
+		else:
+			self.data_reconstructed = tf.nn.conv2d(
+				input=self.latents_unpooled,
+				filters=self.lambdas_deconv,
+				padding='valid'
+			)
+			self.data_reconstructed_lab = tf.nn.conv2d(
+				input=self.latents_unpooled_lab,
+				filters=self.lambdas_deconv,
+				padding='valid'
+			)
+
+		# compute reconstruction error
+		self.reconstruction_error = tf.reduce_mean((self.data_4D_unl_clean - self.data_reconstructed) ** 2)
+		self.reconstruction_error_lab = tf.reduce_mean((self.data_4D_lab - self.data_reconstructed_lab) ** 2)
+
+	def pad_images(self, images, image_shape, filter_size, border_mode):
+		"""
+		pad image with the given pad_size
+		"""
+		# Allocate space for padded images.
+		if border_mode == 'valid':
+			x_padded = images
+			padded_shape = image_shape
+		else:
+			if border_mode == 'half':
+				h_pad = filter_size[0] // 2
+				w_pad = filter_size[1] // 2
+			elif border_mode == 'full':
+				h_pad = filter_size[0] - 1
+				w_pad = filter_size[1] - 1
+
+			s = image_shape
+			padded_shape = (s[0], s[1], s[2] + 2*h_pad, s[3] + 2*w_pad)
+			row_pad = tf.zeros([s[0], s[1], s[2], 2*w_pad])
+			x_padded_r = tf.concat(3,[images,row_pad])
+			col_pad = tf.zeros([s[0], s[1], s[2] + 2*h_pad, 2*w_pad])
+			x_padded = tf.concat(2,[x_padded_r,col_pad])
+			# x_padded = tf.zeros(padded_shape)
+
+			# # Copy the original image to the central part.
+			# x_padded = T.set_subtensor(
+			# 	x_padded[:, :, h_pad:s[2]+h_pad, w_pad:s[3]+w_pad],
+			# 	images,
+			# )
+
+		return x_padded, padded_shape
