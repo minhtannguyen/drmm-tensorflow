@@ -7,7 +7,18 @@ __author__ = 'rishabgoel'
 Based on theano code minhtannguyen
 """
 
+
+import matplotlib as mpl
+
+mpl.use('Agg')
+
 import numpy as np
+
+np.set_printoptions(threshold='nan')
+
+
+from utils import BatchNormalization
+
 import tensorflow as tf
 
 
@@ -158,34 +169,29 @@ class Layer():
 		#
 		# initialize the model parameters.
 		# all parameters involved in the training are collected in self.params for the gradient descent step
-		#
-
-		# set up a random number generator
-		self.srng = RandomStreams()
-		self.srng.seed(np.random.randint(2 ** 15))
 
 		# add noise to the input if is_noisy
 		if self.is_noisy:
 			if self.data_4D_unl is not None:
 				self.data_4D_unl = self.data_4D_unl + \
-								   self.noise_weight * self.srng.normal(size=(self.Ni, self.Cin, self.H, self.W),
-																		avg=0.0, std=self.noise_std)
+								   self.noise_weight * tf.random_normal([self.Ni, self.Cin, self.H, self.W],
+																		mean=0.0, stddev=self.noise_std)
 			if self.data_4D_lab is not None:
 				self.data_4D_lab = self.data_4D_lab + \
-								   self.noise_weight * self.srng.normal(size=(self.Ni, self.Cin, self.H, self.W),
-																		avg=0.0, std=self.noise_std)
+								   self.noise_weight * tf.random_normal([self.Ni, self.Cin, self.H, self.W],
+																		mean=0.0, stddev=self.noise_std)
 
 
 		# initialize t and a priors
-		self.pi_t = tf.Variable(tf.ones([self.latents_shape[1:]]), name = "pi_t")
-		self.pi_a = tf.Variable(tf.ones([self.latents_shape[1:]]), name = "pi_a")
-		self.pi_a_old = tf.Variable(tf.ones([self.latents_shape[1:]]), name = "pi_a_old")
-		self.pi_ta = tf.Variable(tf.ones([self.latents_shape[1:]]), name = "pi_ta")
+		self.pi_t = tf.Variable(tf.ones([self.latents_shape[1:]], dtype = tf.float32), name = "pi_t")
+		self.pi_a = tf.Variable(tf.ones([self.latents_shape[1:]], dtype = tf.float32), name = "pi_a")
+		self.pi_a_old = tf.Variable(tf.ones([self.latents_shape[1:]], dtype = tf.float32), name = "pi_a_old")
+		self.pi_ta = tf.Variable(tf.ones([self.latents_shape[1:]], dtype = tf.float32), name = "pi_ta")
 		
 
 		# initialize the pruning masking matrices
 		if self.prun_mat_init is None:
-			self.prun_mat = tf.Variable(tf.ones([self.latents_shape[1:]]), name = "prun_mat")
+			self.prun_mat = tf.Variable(tf.ones([self.latents_shape[1:]], dtype = tf.float32), name = "prun_mat")
 		else:
 			self.prun_mat = tf.Variable(tf.convert_to_tensor(np.asarray(self.prun_mat_init), dtype = tf.float32, name = "prun_mat"))
 			
@@ -286,7 +292,7 @@ class Layer():
 		# do batch normalization or divisive normalization
 		if self.is_bn_BU: # do batch normalization
 			latents_after_BN = self.bn_BU.get_result(input=latents_before_BN, input_shape=self.latents_shape)
-			scale_s = tf.ones(latents_before_BN.get_shape().to_list())
+			scale_s = tf.ones(latents_before_BN.get_shape().to_list(), dtype = tf.float32)
 			latents_demeaned = latents_before_BN
 			latents_demeaned_squared = latents_demeaned ** 2
 		elif self.is_dn: # do divisive normalization
