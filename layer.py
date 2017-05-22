@@ -85,24 +85,30 @@ class Layer():
 				 gamma_val_init=None, beta_val_init=None,
 				 prun_mat_init=None, prun_synap_mat_init=None,
 				 mean_bn_init=None, var_bn_init=None,
-				 pool_t_mode='max_t', border_mode='valid', nonlin='relu', 
+				 pool_t_mode='max_t', border_mode='VALID', nonlin='relu', 
 				 mean_pool_size=(2, 2),
 				 max_condition_number=1.e3,
 				 weight_init="xavier",
-				 is_noisy=False,
-				 is_bn_BU=False,
+				 # is_noisy=False,
+				 is_noisy=True,
+				 # is_bn_BU=False,
+				 is_bn_BU=True,
 				 epsilon=1e-10,
 				 momentum_pi_t=0.99,
 				 momentum_pi_a=0.99,
 				 momentum_pi_ta=0.99,
 				 momentum_pi_synap=0.99,
-				 is_prun=False,
-				 is_prun_synap=False,
-				 is_dn=False,
+				 # is_prun=False,
+				 is_prun=True,
+				 # is_prun_synap=False,
+				 is_prun_synap=True,
+				 # is_dn=False,
+				 is_dn=True,
 				 sigma_dn_init=None,
 				 b_dn_init=None,
 				 alpha_dn_init=None,
-				 update_mean_var_with_sup=False):
+				 # update_mean_var_with_sup=False
+				 update_mean_var_with_sup=True):
 
 		self.K = K  # number of lambdas_t/filters
 		self.M = M  # latent dimensionality. Set to 1 for our model
@@ -118,18 +124,18 @@ class Layer():
 		self.D = self.h * self.w * self.Cin  # patch size
 		self.W = W  # width of image
 		self.H = H  # height of image
-		if border_mode == 'valid':  # convolution mode. Output size is smaller than input size
+		if border_mode == 'VALID':  # convolution mode. Output size is smaller than input size
 			self.Np = (self.H - self.h + 1) * (self.W - self.w + 1)  # no. of patches per image
 			self.latents_shape = (self.Ni, self.K, self.H - self.h + 1, self.W - self.w + 1)
-		elif border_mode == 'half':  # convolution mode. Output size is the same as input size
+		elif border_mode == 'HALF':  # convolution mode. Output size is the same as input size
 			self.Np = self.H * self.W  # no. of patches per image
 			self.latents_shape = (self.Ni, self.K, self.H, self.W)
-		elif border_mode == 'full':  # # convolution mode. Output size is greater than input size
+		elif border_mode == 'SAME':  # # convolution mode. Output size is greater than input size
 			self.Np = (self.H + self.h - 1) * (self.W + self.w - 1)  # no. of patches per image
 			self.latents_shape = (self.Ni, self.K, self.H + self.h - 1, self.W + self.w - 1)
 		else:
 			raise
-
+		print "latent_shape : ", self.latents_shape, data_4D_lab.get_shape()
 		self.N = self.Ni * self.Np  # total no. of patches and total no. of hidden units
 		self.mean_pool_size = mean_pool_size  # size of the mean pooling layer before the softmax regression
 
@@ -146,6 +152,7 @@ class Layer():
 
 		self.pool_t_mode = pool_t_mode  # Pooling mode={'max_t','mean_t`,None}
 		self.nonlin = nonlin  # {`relu`, `abs`, None}
+		
 		self.border_mode = border_mode  # {'valid`, 'full', `half`} mode for the convolutions
 		self.max_condition_number = max_condition_number  # a condition number to make computations more stable. Set to 1.e3
 		self.weight_init = weight_init  # type of weight initialisation
@@ -163,7 +170,7 @@ class Layer():
 		self.is_dn = is_dn  # {True, False} apply divisive normalization (DivNorm) or not
 		self.update_mean_var_with_sup = update_mean_var_with_sup  # {True, False} if True, only use data_4D_lab to update
 																	# the mean and var in BatchNorm
-		self._inialize()
+		self._initialize()
 
 	def _initialize(self):
 		#
@@ -183,31 +190,32 @@ class Layer():
 
 
 		# initialize t and a priors
-		self.pi_t = tf.Variable(tf.ones([self.latents_shape[1:]], dtype = tf.float32), name = "pi_t")
-		self.pi_a = tf.Variable(tf.ones([self.latents_shape[1:]], dtype = tf.float32), name = "pi_a")
-		self.pi_a_old = tf.Variable(tf.ones([self.latents_shape[1:]], dtype = tf.float32), name = "pi_a_old")
-		self.pi_ta = tf.Variable(tf.ones([self.latents_shape[1:]], dtype = tf.float32), name = "pi_ta")
+		print self.latents_shape[1:]
+		self.pi_t = tf.Variable(tf.ones(self.latents_shape[1:], dtype = tf.float32), name = "pi_t")
+		self.pi_a = tf.Variable(tf.ones(self.latents_shape[1:], dtype = tf.float32), name = "pi_a")
+		self.pi_a_old = tf.Variable(tf.ones(self.latents_shape[1:], dtype = tf.float32), name = "pi_a_old")
+		self.pi_ta = tf.Variable(tf.ones(self.latents_shape[1:], dtype = tf.float32), name = "pi_ta")
 		
 
 		# initialize the pruning masking matrices
 		if self.prun_mat_init is None:
-			self.prun_mat = tf.Variable(tf.ones([self.latents_shape[1:]], dtype = tf.float32), name = "prun_mat")
+			self.prun_mat = tf.Variable(tf.ones(self.latents_shape[1:], dtype = tf.float32), name = "prun_mat")
 		else:
 			self.prun_mat = tf.Variable(tf.convert_to_tensor(np.asarray(self.prun_mat_init), dtype = tf.float32, name = "prun_mat"))
 			
 		if self.prun_synap_mat_init is None:
-			self.prun_synap_mat = tf.Variable(tf.ones([self.K, self.Cin, self.h, self.w]), dtype=tf.float32,name='prun_synap_mat', borrow=True)
+			self.prun_synap_mat = tf.Variable(tf.ones([self.h, self.w, self.Cin, self.K]), dtype=tf.float32,name='prun_synap_mat')
 		else:
 			self.prun_synap_mat = tf.Variable(tf.convert_to_tensor(np.asarray(self.prun_synap_mat_init)), dtype=tf.float32, name='prun_mat')
 
 		# initialize synapse prior (its probability to be ON or OFF)
 		if self.is_prun_synap:
-			self.pi_synap = tf.Variable(tf.ones([self.K, self.Cin, self.h, self.w], dtype = tf.float32), name = 'pi_synap')
-			self.pi_synap_old = tf.Variable(tf.ones([self.K, self.Cin, self.h, self.w], dtype = tf.float32), name = 'pi_synap_old')
+			self.pi_synap = tf.Variable(tf.ones([self.h, self.w, self.Cin, self.K], dtype = tf.float32), name = 'pi_synap')
+			self.pi_synap_old = tf.Variable(tf.ones([self.h, self.w, self.Cin, self.K], dtype = tf.float32), name = 'pi_synap_old')
 			
 		# pi_t_final and pi_a_final are used after training for sampling
-		self.pi_t_final = tf.Variable(tf.ones([self.latents_shape[1:]], dtype = tf.float32), name = "pi_t_final")
-		self.pi_a_final = tf.Variable(tf.ones([self.latents_shape[1:]], dtype = tf.float32), name = "pi_a_final")
+		self.pi_t_final = tf.Variable(tf.ones(self.latents_shape[1:], dtype = tf.float32), name = "pi_t_final")
+		self.pi_a_final = tf.Variable(tf.ones(self.latents_shape[1:], dtype = tf.float32), name = "pi_a_final")
 		
 		# initialize the lambdas_t
 		# if initial values for lambdas_t are not provided, randomly initialize lambdas_t
@@ -215,7 +223,7 @@ class Layer():
 		if self.lambdas_t_val_init is None:
 			if self.weight_init == "xavier":
 				initialised = 1
-				self.lambdas_t = tf.Variable(name = "lambdas_t", shape = [self.K, self.D, self.M],  initializer = tf.contrib.layers.xavier_initializer())
+				self.lambdas_t = tf.get_variable(shape = [self.K, self.D, self.M],name = "lambdas_t",  initializer = tf.contrib.layers.xavier_initializer())
 			else:
 				lambdas_t_value = np.random.randn(self.K, self.D, self.M) / \
 								np.sqrt(self.max_condition_number)
@@ -282,13 +290,15 @@ class Layer():
 
 		"""
 		# compute the activations after convolutions
-
+		print self.border_mode,input.get_shape(), betas.get_shape()
 		latents_before_BN = tf.nn.conv2d(
+			data_format = "NCHW",
 			input=input,
-			filters=betas,
+			filter=betas,
+			strides = [1,1,1,1],
 			padding=self.border_mode
 		)
-
+		print latents_before_BN.get_shape()
 		# do batch normalization or divisive normalization
 		if self.is_bn_BU: # do batch normalization
 			latents_after_BN = self.bn_BU.get_result(input=latents_before_BN, input_shape=self.latents_shape)
@@ -299,6 +309,8 @@ class Layer():
 			filter_for_norm_local = tf.Variable(tf.ones((1, self.K, self.h, self.w), dtype=tf.float32), name='filter_norm_local')
 
 			sum_local = tf.nn.conv2d(
+				data_format = "NCHW",
+				strides = [1,1,1,1],
 				input=latents_before_BN,
 				filters=filter_for_norm_local,
 				padding='half'
@@ -311,6 +323,8 @@ class Layer():
 			latents_demeaned_squared = latents_demeaned**2
 
 			norm_local = tf.nn.conv2d(
+				data_format = "NCHW",
+				strides = [1,1,1,1],
 				input=latents_demeaned_squared,
 				filters=filter_for_norm_local,
 				padding='half'
@@ -330,6 +344,7 @@ class Layer():
 			latents_demeaned = latents_before_BN
 			latents_demeaned_squared = latents_demeaned ** 2
 
+		print latents_after_BN.get_shape(), self.prun_mat.get_shape()
 		latents = latents_after_BN * self.prun_mat # masking the activations by the neuron pruning mask.
 													# self.prun_mat is all 1's if no neuron pruning
 
@@ -376,10 +391,10 @@ class Layer():
 
 		# downsample the activations
 		if self.pool_t_mode == 'max_t':
-			output = tf.nn.avg_pool(latents_masked, ksize = [1,2,2,1], strides = [1,2,2,1])
+			output = tf.nn.max_pool(latents_masked, ksize = [1,2,2,1], strides = [1,2,2,1], padding = "VALID")
 			output = output * 4.0
 		elif self.pool_t_mode == 'mean_t':
-			output = tf.nn.avg_pool(latents_masked, ksize = [1,self.mean_pool_size[0],self.mean_pool_size[1],1], strides = [1,self.mean_pool_size[0],self.mean_pool_size[1],1])
+			output = tf.nn.avg_pool(latents_masked, ksize = [1,self.mean_pool_size[0],self.mean_pool_size[1],1], strides = [1,self.mean_pool_size[0],self.mean_pool_size[1],1], padding = "VALID")
 			
 		else:
 			output = latents_masked
@@ -387,14 +402,17 @@ class Layer():
 		return latents_before_BN, latents, max_over_a_mask, max_over_t_mask, latents_masked, masked_mat, output, mask_input, scale_s, latents_demeaned, latents_demeaned_squared
 
 
-	def EBottomUp(self, args):
+	def EBottomUp(self):
 		"""
 		E-step bottom-up infers the latents in the images
 		"""
 
 		# reshape lambdas_t into the filters
+
 		self.betas = tf.transpose(self.lambdas_t, [0, 2, 1])
-		betas = tf.reshape(self.betas[:, 0, :], shape=(self.K, self.Cin, self.h, self.w))
+		betas = tf.reshape(self.betas[:, 0, :], shape=(self.h, self.w, self.Cin, self.K))
+		print betas.get_shape(),"here", self.prun_synap_mat
+
 		betas = betas * self.prun_synap_mat
 
 		# run bottom up for labeled examples.
@@ -455,11 +473,13 @@ class Layer():
 																  filter_size=(self.h, self.w),
 																  border_mode=self.border_mode)
 
-				pi_synap_minibatch = tf.nn.conv2d(input=padded_mask_input,
+				pi_synap_minibatch = tf.nn.conv2d(
+					data_format = "NCHW",input=padded_mask_input,
+					strides = [1,1,1,1],
 										   filters=self.max_over_a_mask.transpose(1, 0, 2, 3),
 										   padding='valid')
 
-			self.pi_synap_minibatch = tf.cast(tf.transpose(pi_synap_minibatch, [1, 0, 2, 3])
+				self.pi_synap_minibatch = tf.cast(tf.transpose(pi_synap_minibatch, [1, 0, 2, 3])
 														 /np.float32(self.Ni*self.latents_shape[2]*self.latents_shape[3]), tf.float32)
 
 		else: # if supervised learning, compute the pi_synap from each minibatch using labeled data
@@ -476,7 +496,9 @@ class Layer():
 																  filter_size=(self.h, self.w),
 																  border_mode=self.border_mode)
 
-				pi_synap_minibatch = tf.nn.conv2d(input=padded_mask_input,
+				pi_synap_minibatch = tf.nn.conv2d(
+					data_format = "NCHW",input=padded_mask_input,
+					strides = [1,1,1,1],
 											filters=self.max_over_a_mask_lab.transpose(1, 0, 2, 3),
 											padding='valid')
 
@@ -515,11 +537,15 @@ class Layer():
 
 		if self.border_mode == 'valid':
 			self.data_reconstructed = tf.nn.conv2d(
+				data_format = "NCHW",
+				strides = [1,1,1,1],
 				input=self.latents_unpooled,
 				filters=self.lambdas_t_deconv,
 				padding='full'
 			)
 			self.data_reconstructed_lab = tf.nn.conv2d(
+				data_format = "NCHW",
+				strides = [1,1,1,1],
 				input=self.latents_unpooled_lab,
 				filters=self.lambdas_t_deconv,
 				padding='full'
@@ -527,22 +553,30 @@ class Layer():
 
 		elif self.border_mode == 'half':
 			self.data_reconstructed = tf.nn.conv2d(
+				data_format = "NCHW",
+				strides = [1,1,1,1],
 				input=self.latents_unpooled,
 				filters=self.lambdas_t_deconv,
 				padding='half'
 			)
 			self.data_reconstructed_lab = tf.nn.conv2d(
+				data_format = "NCHW",
+				strides = [1,1,1,1],
 				input=self.latents_unpooled_lab,
 				filters=self.lambdas_t_deconv,
 				padding='half'
 			)
 		else:
 			self.data_reconstructed = tf.nn.conv2d(
+				data_format = "NCHW",
+				strides = [1,1,1,1],
 				input=self.latents_unpooled,
 				filters=self.lambdas_t_deconv,
 				padding='valid'
 			)
 			self.data_reconstructed_lab = tf.nn.conv2d(
+				data_format = "NCHW",
+				strides = [1,1,1,1],
 				input=self.latents_unpooled_lab,
 				filters=self.lambdas_t_deconv,
 				padding='valid'

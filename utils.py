@@ -124,5 +124,138 @@ class BatchNormalization(object):
 		return output
 	# changing shape for CNN mode
 	def change_shape(self, vec, input_shape):
-		return tf.reshape(tf.tile(vec), multiples  = [input_shape[2] * input_shape[3]]), [input_shape[1], input_shape[2], input_shape[3]])
+		return tf.reshape(tf.tile(vec, multiples  = [input_shape[2] * input_shape[3]]), [input_shape[1], input_shape[2], input_shape[3]])
 
+class HiddenLayerInSoftmax(object):
+	def __init__(self, input_lab, input_unl, n_in, n_out, W_init=None, b_init=None, input_clean=None):
+		"""
+		Typical hidden layer of a MLP: units are fully-connected and have
+		sigmoidal activation function. Weight matrix W is of shape (n_in,n_out)
+		and the bias vector b is of shape (n_out,).
+
+		NOTE : The nonlinearity used here is tanh
+
+		Hidden unit activation is given by: tanh(dot(input,W) + b)
+
+		:type input_lab, input_unl, input_clean: theano.tensor.dmatrix
+		:param input_lab, input_unl, input_clean: a symbolic tensor of shape (n_examples, n_in)
+
+		:type n_in: int
+		:param n_in: dimensionality of input
+
+		:type n_out: int
+		:param n_out: number of hidden units
+
+		"""
+		if W_init is None:
+			W_bound = tf.sqrt(tf.cast(1/n_in, tf.float32))
+			# W_val = np.asarray(np.random.uniform(low=-W_bound, high=W_bound, size=(n_in, n_out)),dtype=theano.config.floatX)
+			self.W = tf.Variable(tf.random_uniform([n_in, n_out], minval = - W_bound, maxval = W_bound, dtype = tf.float32), name='W')
+
+			# self.W = theano.shared(value=numpy.zeros((n_in, n_out),
+			#                                          dtype=theano.config.floatX) + 1e-8,
+			#                        name='W', borrow=True)
+		else:
+			self.W = tf.Variable(tf.conver_to_tensor(W_init), name='W')
+		# initialize the baises b as a vector of n_out 0s
+		if b_init is None:
+			self.b = tf.Variable(tf.zeros([n_out,], dtype=tf.float32) + 1e-8, name='b')
+		else:
+			self.b = tf.Variable(tf.convert_to_tensor(b_init), name='b')
+
+		self.output_lab = None
+		self.output = None
+		self.output_clean = None
+
+		if input_lab is not None:
+			self.output_lab = tf.add(tf.matmul(input_lab, self.W),self.b)
+
+		if input_unl is not None:
+			self.output = tf.add(tf.matmul(input_unl, self.W),self.b)
+
+		if input_clean is not None:
+			self.output_clean = tf.add(tf.matmul(input_clean, self.W),self.b)
+
+		# parameters of the model
+		self.params = [self.W, self.b]
+
+
+
+
+class SoftmaxNonlinearity(object):
+	def __init__(self, input_lab, input_unl, input_clean=None):
+		self.gammas = None
+		self.gammas_clean = None
+		self.gammas_lab = None
+		self.y_pred = None
+		self.y_pred_clean = None
+		self.y_pred_lab = None
+
+		if input_lab != None:
+			self.gammas_lab = tf.nn.softmax(input_lab)
+			self.y_pred_lab = tf.argmax(self.gammas_lab, axis=1)
+
+		if input_unl != None:
+			self.gammas = tf.nn.softmax(input_unl)
+			self.y_pred = tf.argmax(self.gammas, axis=1)
+
+		if input_clean != None:
+			# compute vector of class-membership probabilities in symbolic form
+			self.gammas_clean =  tf.nn.softmax(input_clean)
+			# compute prediction as class whose probability is maximal in
+			# symbolic form
+			self.y_pred_clean = tf.argmax(self.gammas_clean, axis=1)
+
+	def negative_log_likelihood(self, y):
+		"""Return the mean of the negative log-likelihood of the prediction
+		of this model under a given target distribution.
+
+		.. math::
+
+			\frac{1}{|\mathcal{D}|} \mathcal{L} (\theta=\{W,b\}, \mathcal{D}) =
+			\frac{1}{|\mathcal{D}|} \sum_{i=0}^{|\mathcal{D}|} \log(P(Y=y^{(i)}|x^{(i)}, W,b)) \\
+				\ell (\theta=\{W,b\}, \mathcal{D})
+
+		:type y: theano.tensor.TensorType
+		:param y: corresponds to a vector that gives for each example the
+				  correct label
+
+		Note: we use the mean instead of the sum so that
+			  the learning rate is less dependent on the batch size
+		"""
+		# y.shape[0] is (symbolically) the number of rows in y, i.e.,
+		# number of examples (call it n) in the minibatch
+		# T.arange(y.shape[0]) is a symbolic vector which will contain
+		# [0,1,2,... n-1] T.log(self.p_y_given_x) is a matrix of
+		# Log-Probabilities (call it LP) with one row per example and
+		# one column per class LP[T.arange(y.shape[0]),y] is a vector
+		# v containing [LP[0,y[0]], LP[1,y[1]], LP[2,y[2]], ...,
+		# LP[n-1,y[n-1]]] and T.mean(LP[T.arange(y.shape[0]),y]) is
+		# the mean (across minibatch examples) of the elements in v,
+		# i.e., the mean log-likelihood across the minibatch.
+		return -tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(y, self.gammas_lab))
+		# return -T.mean(T.log(self.gammas_lab)[T.arange(y.shape[0]), y])
+
+	def errors(self, y):
+		"""Return a float representing the number of errors in the minibatch
+		over the total number of examples of the minibatch ; zero one
+		loss over the size of the minibatch
+
+		:type y: theano.tensor.TensorType
+		:param y: corresponds to a vector that gives for each example the
+				  correct label
+		"""
+
+		# check if y has same dimension of y_pred
+		if y.ndim != self.y_pred.ndim:
+			raise TypeError(
+				'y should have the same shape as self.y_pred',
+				('y', y.type, 'y_pred', self.y_pred.type)
+			)
+		# check if y is of the correct datatype
+		if y.dtype==tf.int32:
+			# the T.neq operator returns a vector of 0s and 1s, where 1
+			# represents a mistake in prediction
+			return tf.reduce_mean(tf.cast(tf.not_equal(self.y_pred_lab, y), dtype=tf.float32))
+		else:
+			raise NotImplementedError()
