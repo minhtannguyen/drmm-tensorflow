@@ -6,7 +6,7 @@ import tensorflow as tf
 import numpy as np
 
 
-class BatchNormalization(object):
+class BatchNormalizations(object):
 	def __init__(self, insize, momentum, is_train, mode=0, epsilon=1e-10, gamma_val_init=None, beta_val_init=None,
 				 mean_init=None, var_init=None):
 		'''
@@ -37,12 +37,12 @@ class BatchNormalization(object):
 			self.gamma = tf.Variable(tf.convert_to_tensor(gamma_val_init, dtype = tf.float32), name='gamma_bn')
 
 		if beta_val_init is None:
-			self.beta = tf.Variable(tf.ones(insize, dtype=tf.float32), name='beta_bn')
+			self.beta = tf.Variable(tf.zeros(insize, dtype=tf.float32), name='beta_bn')
 		else:
 			self.beta = tf.Variable(tf.convert_to_tensor(beta_val_init, dtype = tf.float32), name='beta_bn')
 
 		if mean_init is None:
-			self.mean = tf.Variable(tf.ones([insize], dtype=tf.float32), name='mean_bn')
+			self.mean = tf.Variable(tf.zeros([insize], dtype=tf.float32), name='mean_bn')
 		else:
 			self.mean = tf.Variable(tf.convert_to_tensor(gamma_val_init, dtype = tf.float32), name='mean_bn')
 
@@ -98,28 +98,34 @@ class BatchNormalization(object):
 						   + (1.0 - self.momentum) * (input_shape[0] / (input_shape[0] - 1) * now_var)
 
 				# self.var_new = self.momentum * self.var + (1.0 - self.momentum) * now_var
-
-				now_mean_4D = tf.case([(tf.not_equal(self.is_train, 0),self.change_shape(now_mean, input_shape))], default =   self.change_shape(self.mean_new, input_shape))
-				now_var_4D = tf.case([(tf.not_equal(self.is_train, 0),self.change_shape(now_var, input_shape))], default =  self.change_shape(self.var_new, input_shape))
+				if self.is_train:
+					now_mean_4D = self.change_shape(now_mean, input_shape)
+					now_var_4D = self.change_shape(now_var, input_shape)
+				else:
+					now_mean_4D = self.change_shape(self.mean_new, input_shape)
+					now_var_4D = self.change_shape(self.var_new, input_shape)
 
 				now_gamma_4D = self.change_shape(self.gamma, input_shape)
 				now_beta_4D = self.change_shape(self.beta, input_shape)
 
-				output = now_gamma_4D * (input - now_mean_4D) / T.sqrt(now_var_4D + self.epsilon) + now_beta_4D
+				output = now_gamma_4D * (input - now_mean_4D) / tf.sqrt(now_var_4D + self.epsilon) + now_beta_4D
 
 			else:
 				now_mean, now_var = tf.nn.moments(input, axes=[0, 2, 3])
 				
 				# now_mean_new_shape = self.change_shape(now_mean)
 				# now_var = T.sqr(T.mean(T.abs_(input - now_mean_new_shape), axis=(0, 2, 3)))
-
-				now_mean_4D = tf.case([(tf.not_equal(self.is_train, 0), self.change_shape(now_mean, input_shape))], default =   self.change_shape(self.mean, input_shape))
-				now_var_4D = tf.case([(tf.not_equal(self.is_train, 0), self.change_shape(now_var, input_shape))], default =  self.change_shape(self.var, input_shape))
+				if self.is_train:
+					now_mean_4D = self.change_shape(now_mean, input_shape)
+					now_var_4D = self.change_shape(now_var, input_shape)
+				else:
+					now_mean_4D = self.change_shape(self.mean, input_shape)
+					now_var_4D = self.change_shape(self.var, input_shape)
 
 				now_gamma_4D = self.change_shape(self.gamma, input_shape)
 				now_beta_4D = self.change_shape(self.beta, input_shape)
 
-				output = now_gamma_4D * (input - now_mean_4D) / T.sqrt(now_var_4D + self.epsilon) + now_beta_4D
+				output = now_gamma_4D * (input - now_mean_4D) / tf.sqrt(now_var_4D + self.epsilon) + now_beta_4D
 
 		return output
 	# changing shape for CNN mode
