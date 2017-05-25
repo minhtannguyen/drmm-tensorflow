@@ -495,7 +495,7 @@ class Layer():
 					= self.get_important_latents_BU(input=self.data_4D_unl, betas=betas)
 				self.output_clean = self.output
 
-		if self.data_4D_unl is not None:
+		if self.data_4D_unl == None:
 			self.pi_t_minibatch = tf.reduce_mean(self.max_over_t_mask, axis=0)
 			self.pi_a_minibatch = tf.reduce_mean(self.max_over_a_mask, axis=0)
 			self.pi_ta_minibatch = tf.reduce_mean(self.masked_mat, axis=0)
@@ -506,42 +506,47 @@ class Layer():
 			if self.is_prun_synap:
 				padded_mask_input, padded_shape = self.pad_images(images=tf.transpose(self.mask_input, [1, 0, 2, 3]),
 																  image_shape=(self.Cin, self.Ni, self.H, self.W),
-																  filter_size=(self.h, self.w),
+																  filter_size=[1,1,self.h, self.w],
 																  border_mode=self.border_mode)
 				print "hereeeee", padded_mask_input.get_shape()
-				pi_synap_minibatch = tf.nn.conv2d(
-					data_format = "NCHW",input=padded_mask_input,
-					strides = [1,1,1,1],
-										   # filter=tf.transpose(self.max_over_a_mask,[1, 0, 2, 3]),
-										   filter = [self.latents_shape[2], self.latents_shape[3], self.Ni, self.K],
-										   padding='VALID')
+				pi_synap_minibatch = tf.nn.conv2d(tf.transpose(padded_mask_input, [0,2,3,1]), tf.transpose(self.max_over_a_mask,[2,3,0,1]), strides=[1, 1, 1, 1], padding="VALID")
+				pi_synap_minibatch = tf.transpose(pi_synap_minibatch,[0,3,1,2])
+				# pi_synap_minibatch = tf.nn.conv2d(
+				# 	data_format = "NCHW",input=padded_mask_input,
+				# 	strides = [1,1,1,1],
+				# 						   # filter=tf.transpose(self.max_over_a_mask,[1, 0, 2, 3]),
+				# 						   filter = [self.latents_shape[2], self.latents_shape[3], self.Ni, self.K],
+				# 						   padding='VALID')
 
 				self.pi_synap_minibatch = tf.cast(tf.transpose(pi_synap_minibatch, [1, 0, 2, 3])
-														 /np.float32(self.Ni*self.latents_shape[2]*self.latents_shape[3]), tf.float32)
+														 /tf.cast((self.Ni*self.latents_shape[2]*self.latents_shape[3]), tf.float32), tf.float32)
 
-		# else: # if supervised learning, compute the pi_synap from each minibatch using labeled data
-		# 	self.pi_t_minibatch = tf.reduce_mean(self.max_over_t_mask_lab, axis=0)
-		# 	self.pi_a_minibatch = tf.reduce_mean(self.max_over_a_mask_lab, axis=0)
-		# 	self.pi_ta_minibatch = tf.reduce_mean(self.masked_mat_lab, axis=0)
-		# 	self.pi_t_new = self.momentum_pi_t * self.pi_t + (1 - self.momentum_pi_t) * self.pi_t_minibatch
-		# 	self.pi_a_new = self.momentum_pi_a * self.pi_a + (1 - self.momentum_pi_a) * self.pi_a_minibatch
-		# 	self.pi_ta_new = self.momentum_pi_ta * self.pi_ta + (1 - self.momentum_pi_ta) * self.pi_ta_minibatch
+		else: # if supervised learning, compute the pi_synap from each minibatch using labeled data
+			print "hohohoho"
+			self.pi_t_minibatch = tf.reduce_mean(self.max_over_t_mask_lab, axis=0)
+			self.pi_a_minibatch = tf.reduce_mean(self.max_over_a_mask_lab, axis=0)
+			self.pi_ta_minibatch = tf.reduce_mean(self.masked_mat_lab, axis=0)
+			self.pi_t_new = self.momentum_pi_t * self.pi_t + (1 - self.momentum_pi_t) * self.pi_t_minibatch
+			self.pi_a_new = self.momentum_pi_a * self.pi_a + (1 - self.momentum_pi_a) * self.pi_a_minibatch
+			self.pi_ta_new = self.momentum_pi_ta * self.pi_ta + (1 - self.momentum_pi_ta) * self.pi_ta_minibatch
 
-		# 	if self.is_prun_synap:
-		# 		padded_mask_input, padded_shape = self.pad_images(images=self.mask_input_lab.transpose(1, 0, 2, 3),
-		# 														  image_shape=(self.Cin, self.Ni, self.H, self.W),
-		# 														  filter_size=(self.h, self.w),
-		# 														  border_mode=self.border_mode)
+			if self.is_prun_synap:
+				padded_mask_input, padded_shape = self.pad_images(images=tf.transpose(self.mask_input_lab, [1, 0, 2, 3]),
+																  image_shape=(self.Cin, self.Ni, self.H, self.W),
+																  filter_size=[1,1, self.h, self.w],
+																  border_mode=self.border_mode)
 
-		# 		pi_synap_minibatch = tf.nn.conv2d(
-		# 			data_format = "NCHW",input=padded_mask_input,
-		# 			strides = [1,1,1,1],
-		# 									filter=self.max_over_a_mask_lab.transpose(1, 0, 2, 3),
-		# 									padding='valid')
+				pi_synap_minibatch = tf.nn.conv2d(tf.transpose(padded_mask_input, [0,2,3,1]), tf.transpose(self.max_over_a_mask,[2,3,0,1]), strides=[1, 1, 1, 1], padding="VALID")
+				pi_synap_minibatch = tf.transpose(pi_synap_minibatch,[0,3,1,2])
+				# pi_synap_minibatch = tf.nn.conv2d(
+				# 	data_format = "NCHW",input=padded_mask_input,
+				# 	strides = [1,1,1,1],
+				# 							filter=self.max_over_a_mask_lab.transpose(1, 0, 2, 3),
+				# 							padding='valid')
 
-		# 		self.pi_synap_minibatch = tf.cast(tf.transpose(pi_synap_minibatch, [1, 0, 2, 3])
-		# 								   / np.float32(self.Ni * self.latents_shape[2] * self.latents_shape[3]),
-		# 								   tf.float32)
+				self.pi_synap_minibatch = tf.cast(tf.transpose(pi_synap_minibatch, [1, 0, 2, 3])
+										   / tf.cast(self.Ni * self.latents_shape[2] * self.latents_shape[3], tf.float32),
+										   tf.float32)
 
 
 	def ETopDown(self, args):
