@@ -1,12 +1,14 @@
 
 
 __author__ = "rishabgoel"
-
+"""
+Based on theano code by minhtannguyen
+"""
 import tensorflow as tf
 import numpy as np
 
 
-class BatchNormalizations(object):
+class BatchNormalization(object):
 	def __init__(self, insize, momentum, is_train, mode=0, epsilon=1e-10, gamma_val_init=None, beta_val_init=None,
 				 mean_init=None, var_init=None):
 		'''
@@ -59,8 +61,9 @@ class BatchNormalizations(object):
 
 	def get_result(self, input, input_shape):
 		# returns BN result for given input.
-
+		# self.mode = 1
 		if self.mode == 0:
+			# self.run_mode = 1
 			print('Use Feature-wise BN')
 			if self.run_mode == 0:
 				now_mean, now_var = tf.nn.moments(input, axes=[0])
@@ -85,10 +88,12 @@ class BatchNormalizations(object):
 			# in CNN mode, gamma and beta exists for every single channel separately.
 			# for each channel, calculate mean and std for (mini_batch_size * row * column) elements.
 			# then, each channel has own scalar gamma/beta parameters.
-			print('Use Layer-wise BN')
+			print('Use Layer-wise BN,t')
+			# self.run_mode = 0
 			if self.run_mode == 0:
+				print "tensorflow"
 				now_mean, now_var = tf.nn.moments(input, axes=[0, 2, 3])
-
+				self.now_mean, self.now_var = now_mean, now_var
 				# now_mean_new_shape = self.change_shape(now_mean)
 				# now_var = T.sqr(T.mean(T.abs_(input - now_mean_new_shape), axis=(0,2,3)))
 
@@ -98,23 +103,25 @@ class BatchNormalizations(object):
 						   + (1.0 - self.momentum) * (input_shape[0] / (input_shape[0] - 1) * now_var)
 
 				# self.var_new = self.momentum * self.var + (1.0 - self.momentum) * now_var
-				if self.is_train:
-					now_mean_4D = self.change_shape(now_mean, input_shape)
-					now_var_4D = self.change_shape(now_var, input_shape)
-				else:
-					now_mean_4D = self.change_shape(self.mean_new, input_shape)
-					now_var_4D = self.change_shape(self.var_new, input_shape)
+				# print self.is_train
+				self.is_train = 1
+				now_mean_4D = tf.cond(tf.not_equal(self.is_train, 0), lambda: self.change_shape(now_mean, input_shape), lambda: self.change_shape(self.mean_new, input_shape))
+				now_var_4D = tf.cond(tf.not_equal(self.is_train, 0), lambda: self.change_shape(now_var, input_shape), lambda: self.change_shape(self.var_new, input_shape))
 
+				self.now_mean_4D =now_mean_4D
+				self.now_var_4D = now_var_4D
 				now_gamma_4D = self.change_shape(self.gamma, input_shape)
 				now_beta_4D = self.change_shape(self.beta, input_shape)
 
 				output = now_gamma_4D * (input - now_mean_4D) / tf.sqrt(now_var_4D + self.epsilon) + now_beta_4D
 
 			else:
+				print "tensorflow1"
 				now_mean, now_var = tf.nn.moments(input, axes=[0, 2, 3])
-				
+				# print self.is_train
 				# now_mean_new_shape = self.change_shape(now_mean)
 				# now_var = T.sqr(T.mean(T.abs_(input - now_mean_new_shape), axis=(0, 2, 3)))
+				# self.is_train = 1
 				if self.is_train:
 					now_mean_4D = self.change_shape(now_mean, input_shape)
 					now_var_4D = self.change_shape(now_var, input_shape)
@@ -130,7 +137,8 @@ class BatchNormalizations(object):
 		return output
 	# changing shape for CNN mode
 	def change_shape(self, vec, input_shape):
-		return tf.reshape(tf.tile(vec, multiples  = [input_shape[2] * input_shape[3]]), [input_shape[1], input_shape[2], input_shape[3]])
+		return tf.reshape(tf.reshape(tf.tile(tf.reshape(vec, [-1,1]), [1, input_shape[2] * input_shape[3]]), [-1]),
+			[input_shape[1], input_shape[2], input_shape[3]])
 
 class HiddenLayerInSoftmax(object):
 	def __init__(self, input_lab, input_unl, n_in, n_out, W_init=None, b_init=None, input_clean=None):
