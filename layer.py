@@ -495,7 +495,7 @@ class Layer():
 					= self.get_important_latents_BU(input=self.data_4D_unl, betas=betas)
 				self.output_clean = self.output
 
-		if self.data_4D_unl == None:
+		if self.data_4D_unl is not None:
 			self.pi_t_minibatch = tf.reduce_mean(self.max_over_t_mask, axis=0)
 			self.pi_a_minibatch = tf.reduce_mean(self.max_over_a_mask, axis=0)
 			self.pi_ta_minibatch = tf.reduce_mean(self.masked_mat, axis=0)
@@ -549,19 +549,33 @@ class Layer():
 										   tf.float32)
 
 
-	def ETopDown(self, args):
+	def ETopDown(self, mu_cg, mu_cg_lab):
 		#
 		# Reconstruct the images to compute the complete-data log-likelihood
 		#
-
+		if tf.contrib.framework.is_tensor(mu_cg) == False:
+			mu_cg = tf.convert_to_tensor(mu_cg, dtype = tf.float32)
+			mu_cg_lab = tf.convert_to_tensor(mu_cg_lab, dtype = tf.float32)
+		self.a = tf.tile(mu_cg,multiples = [1,1,2,1])
 		# Up-sample the latent presentations
+
+		mu_cg_sh = mu_cg.get_shape().as_list()
+		# self.a = tf.reshape(tf.tile(tf.reshape(mu_cg,[mu_cg_sh[0],-1,1,mu_cg_sh[3]]),[1,1,2,1]),[mu_cg_sh[0],mu_cg_sh[1],-1,mu_cg_sh[3]])
+		self.a = self._repeat(mu_cg, mu_cg_sh, [1,1,2,1])
+		# self.a = tf.reshape(tf.tile(tf.reshape(mu_cg,[mu_cg_sh[0],-1,1,mu_cg_sh[3]]),[1,1,2,1]),[mu_cg_sh[0],mu_cg_sh[1],-1,mu_cg_sh[3]])
 		if self.pool_t_mode == 'max_t':
-			self.latents_unpooled_no_mask = mu_cg.repeat(2, axis=2).repeat(2, axis=3)
-			self.latents_unpooled_no_mask_lab = mu_cg_lab.repeat(2, axis=2).repeat(2, axis=3)
+			latents_unpooled_no_mask = self._repeat(mu_cg, mu_cg_sh,[1,1,2,1])
+			self.latents_unpooled_no_mask = self._repeat1(latents_unpooled_no_mask, latents_unpooled_no_mask.get_shape().as_list(), [1,1,1,2])
+
+			latents_unpooled_no_mask_lab = self._repeat(mu_cg_lab, mu_cg_sh,[1,1,2,1])
+			self.latents_unpooled_no_mask_lab = self._repeat1(latents_unpooled_no_mask_lab, latents_unpooled_no_mask_lab.get_shape().as_list(), [1,1,1,2])
+			
 		elif self.pool_t_mode == 'mean_t':
-			self.latents_unpooled_no_mask = mu_cg.repeat(self.mean_pool_size[0], axis=2).repeat(self.mean_pool_size[1], axis=3)
-			self.latents_unpooled_no_mask_lab = mu_cg_lab.repeat(self.mean_pool_size[0], axis=2).repeat(self.mean_pool_size[1],
-																								axis=3)
+			latents_unpooled_no_mask = self._repeat(mu_cg, mu_cg_sh,[1,1,self.mean_pool_size[0],1])
+			self.latents_unpooled_no_mask = self._repeat1(latents_unpooled_no_mask, latents_unpooled_no_mask.get_shape().as_list(), [1,1,1,self.mean_pool_size[1]])			
+
+			latents_unpooled_no_mask_lab = self._repeat(mu_cg_lab, mu_cg_sh,[1,1,self.mean_pool_size[0],1])
+			self.latents_unpooled_no_mask_lab = self._repeat1(latents_unpooled_no_mask_lab, latents_unpooled_no_mask_lab.get_shape().as_list(), [1,1,1,self.mean_pool_size[1]])			
 		elif self.pool_t_mode is None:
 			self.latents_unpooled_no_mask = mu_cg
 			self.latents_unpooled_no_mask_lab = mu_cg_lab
@@ -569,59 +583,67 @@ class Layer():
 			raise
 
 		# apply the a and t infered in the E-step bottom-up inference on the up-sampled intermediate image
+		if self.latents_unpooled_no_mask.get_shape()!=self.masked_mat.get_shape():
+			self.latents_unpooled_no_mask = tf.concat([self.latents_unpooled_no_mask, tf.expand_dims(self.latents_unpooled_no_mask[:,:,-1,:],2)],2)
+			self.latents_unpooled_no_mask_lab = tf.concat([self.latents_unpooled_no_mask_lab, tf.expand_dims(self.latents_unpooled_no_mask_lab[:,:,-1,:],2)],2)
 		self.latents_unpooled = self.latents_unpooled_no_mask * self.masked_mat * self.prun_mat
 		self.latents_unpooled_lab = self.latents_unpooled_no_mask_lab * self.masked_mat_lab * self.prun_mat
-
+		print self.latents_unpooled.get_shape()
 		# reconstruct/sample the image
-		self.lambdas_t_deconv = (tf.reshape(self.lambdas_t[:, :, 0],
-										 shape=(self.K, self.Cin, self.h, self.w)) * self.prun_synap_mat).transpose(1, 0, 2, 3)
+		self.lambdas_t_deconv = tf.transpose(tf.reshape(self.lambdas_t[:, :, 0],
+										 shape=(self.K, self.Cin, self.h, self.w)) * self.prun_synap_mat,[1, 0, 2, 3])
 		self.lambdas_t_deconv = self.lambdas_t_deconv[:, :, ::-1, ::-1]
 
-		if self.border_mode == 'valid':
+		if self.border_mode == 'VALID':
+			latents_unpooled, _ = self.pad_images(self.latents_unpooled,self.latents_unpooled.get_shape(),self.lambdas_t_deconv.get_shape(), "FULL")
+			# print _
 			self.data_reconstructed = tf.nn.conv2d(
 				data_format = "NCHW",
 				strides = [1,1,1,1],
-				input=self.latents_unpooled,
-				filter=self.lambdas_t_deconv,
-				padding='full'
+				input= latents_unpooled,
+				filter=tf.transpose(self.lambdas_t_deconv,[2,3,1,0]),
+				padding='VALID'
 			)
+			latents_unpooled_lab, _ = self.pad_images(self.latents_unpooled_lab,self.latents_unpooled_lab.get_shape(),self.lambdas_t_deconv.get_shape(), "FULL")
 			self.data_reconstructed_lab = tf.nn.conv2d(
 				data_format = "NCHW",
 				strides = [1,1,1,1],
-				input=self.latents_unpooled_lab,
-				filter=self.lambdas_t_deconv,
-				padding='full'
+				input=latents_unpooled_lab,
+				filter=tf.transpose(self.lambdas_t_deconv,[2,3,1,0]),
+				padding='VALID'
 			)
 
-		elif self.border_mode == 'half':
+		elif self.border_mode == 'HALF':
+			latents_unpooled, _ = self.pad_images(self.latents_unpooled,self.latents_unpooled.get_shape(),self.lambdas_t_deconv.get_shape(), "HALF")
 			self.data_reconstructed = tf.nn.conv2d(
 				data_format = "NCHW",
 				strides = [1,1,1,1],
-				input=self.latents_unpooled,
-				filter=self.lambdas_t_deconv,
-				padding='half'
+				input=latents_unpooled,
+				filter=tf.transpose(self.lambdas_t_deconv,[2,3,1,0]),
+				padding='VALID'
 			)
+			latents_unpooled_lab, _ = self.pad_images(self.latents_unpooled_lab,self.latents_unpooled_lab.get_shape(),self.lambdas_t_deconv.get_shape(), "HALF")
 			self.data_reconstructed_lab = tf.nn.conv2d(
 				data_format = "NCHW",
 				strides = [1,1,1,1],
-				input=self.latents_unpooled_lab,
-				filter=self.lambdas_t_deconv,
-				padding='half'
+				input=latents_unpooled_lab,
+				filter=tf.transpose(self.lambdas_t_deconv,[2,3,1,0]),
+				padding='VALID'
 			)
 		else:
 			self.data_reconstructed = tf.nn.conv2d(
 				data_format = "NCHW",
 				strides = [1,1,1,1],
 				input=self.latents_unpooled,
-				filter=self.lambdas_t_deconv,
-				padding='valid'
+				filter=tf.transpose(self.lambdas_t_deconv,[2,3,1,0]),
+				padding='VALID'
 			)
 			self.data_reconstructed_lab = tf.nn.conv2d(
 				data_format = "NCHW",
 				strides = [1,1,1,1],
 				input=self.latents_unpooled_lab,
-				filter=self.lambdas_t_deconv,
-				padding='valid'
+				filter=tf.transpose(self.lambdas_t_deconv,[2,3,1,0]),
+				padding='VALID'
 			)
 
 		# compute reconstruction error
@@ -641,7 +663,7 @@ class Layer():
 			if border_mode == 'HALF':
 				h_pad = filter_size[2] // 2
 				w_pad = filter_size[3] // 2
-			elif border_mode == 'SAME':
+			elif border_mode == 'FULL':
 				h_pad = filter_size[2] - 1
 				w_pad = filter_size[3] - 1
 
@@ -649,14 +671,14 @@ class Layer():
 			# padded_shape = (s[0], s[1], s[2] + 2*h_pad, s[3] + 2*w_pad)
 			row_pad1 = tf.zeros([s[0], s[1], h_pad, s[3]])
 			row_pad2 = tf.zeros([s[0], s[1], h_pad, s[3]])
-			
+			print h_pad
 			x_padded_r = tf.concat([row_pad2, images, row_pad1],2)
-			col_pad1 = tf.zeros([s[0], s[1], s[2] + 2*h_pad, w_pad])
-			col_pad2 = tf.zeros([s[0], s[1], s[2] + 2*h_pad, w_pad])
+			col_pad1 = tf.zeros([s[0], s[1], s[2] + 2*int(h_pad), w_pad])
+			col_pad2 = tf.zeros([s[0], s[1], s[2] + 2*int(h_pad), w_pad])
 			
 			x_padded = tf.concat([col_pad1, x_padded_r, col_pad2], 3)
 			# x_padded = tf.zeros(padded_shape)
-			padded_shape = [s[0], s[1], s[2]+2*h_pad, s[3]+2*w_pad]
+			padded_shape = [s[0], s[1], s[2]+2*int(h_pad), s[3]+2*int(w_pad)]
 			# # Copy the original image to the central part.
 			# x_padded = T.set_subtensor(
 			# 	x_padded[:, :, h_pad:s[2]+h_pad, w_pad:s[3]+w_pad],
@@ -664,3 +686,8 @@ class Layer():
 			# )
 
 		return x_padded, padded_shape
+	def _repeat(self, inp, inp_shape, multiples):
+		return tf.reshape(tf.tile(tf.reshape(inp,[inp_shape[0],-1,1,inp_shape[3]]),multiples),[inp_shape[0],inp_shape[1],-1,inp_shape[3]])
+
+	def _repeat1(self, inp, inp_shape, multiples):
+		return tf.reshape(tf.tile(tf.reshape(inp,[inp_shape[0],inp_shape[1],-1,1]),multiples),[inp_shape[0],inp_shape[1],inp_shape[2],-1])
