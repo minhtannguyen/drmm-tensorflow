@@ -247,7 +247,7 @@ class SoftmaxNonlinearity(object):
 		# LP[n-1,y[n-1]]] and T.mean(LP[T.arange(y.shape[0]),y]) is
 		# the mean (across minibatch examples) of the elements in v,
 		# i.e., the mean log-likelihood across the minibatch.
-		return -tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(y, self.gammas_lab))
+		return -tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels = y, logits = self.gammas_lab))
 		# return -T.mean(T.log(self.gammas_lab)[T.arange(y.shape[0]), y])
 
 	def errors(self, y):
@@ -261,15 +261,19 @@ class SoftmaxNonlinearity(object):
 		"""
 
 		# check if y has same dimension of y_pred
-		if y.ndim != self.y_pred.ndim:
+		# print self.y_pred.get_shape(), y.get_shape
+		# self.y
+		if y.get_shape() != self.y_pred.get_shape():
 			raise TypeError(
 				'y should have the same shape as self.y_pred',
 				('y', y.type, 'y_pred', self.y_pred.type)
 			)
 		# check if y is of the correct datatype
-		if y.dtype==tf.int32:
+		if y.dtype==tf.int64:
 			# the T.neq operator returns a vector of 0s and 1s, where 1
 			# represents a mistake in prediction
+			# self.y_pred.dtype = tf.cast(self.)
+			# d = tf.not_equal(self.y_pred_lab, y)
 			return tf.reduce_mean(tf.cast(tf.not_equal(self.y_pred_lab, y), dtype=tf.float32))
 		else:
 			raise NotImplementedError()

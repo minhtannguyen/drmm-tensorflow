@@ -131,7 +131,7 @@ class Layer():
 		elif border_mode == 'HALF':  # convolution mode. Output size is the same as input size
 			self.Np = self.H * self.W  # no. of patches per image
 			self.latents_shape = (self.Ni, self.K, self.H, self.W)
-		elif border_mode == 'SAME':  # # convolution mode. Output size is greater than input size
+		elif border_mode == 'FULL':  # # convolution mode. Output size is greater than input size
 			self.Np = (self.H + self.h - 1) * (self.W + self.w - 1)  # no. of patches per image
 			self.latents_shape = (self.Ni, self.K, self.H + self.h - 1, self.W + self.w - 1)
 		else:
@@ -296,7 +296,11 @@ class Layer():
 		# self.betas111 = betas
 		# self.iiii = input
 		if self.border_mode != 'FULL':
-			latents_before_BN = tf.nn.conv2d(tf.transpose(input, [0,2,3,1]), tf.transpose(betas,[2,3,1,0]), strides=[1, 1, 1, 1], padding=self.border_mode)
+			if self.border_mode == "HALF":
+				padded_imgs,_ = self.pad_images(input, input.get_shape(), betas.get_shape().as_list(),"HALF")
+				latents_before_BN = tf.nn.conv2d(tf.transpose(padded_imgs, [0,2,3,1]), tf.transpose(betas,[2,3,1,0]), strides=[1, 1, 1, 1], padding="VALID")
+			else:
+				latents_before_BN = tf.nn.conv2d(tf.transpose(input, [0,2,3,1]), tf.transpose(betas,[2,3,1,0]), strides=[1, 1, 1, 1], padding="VALID")
 			latents_before_BN = tf.transpose(latents_before_BN, [0, 3, 1, 2])
 		else:
 			latents_before_BN = tf.nn.conv2d_transpose(tf.transpose(input, [0,2,3,1]), tf.transpose(betas,[2,3,0,1])[::-1,::-1,:,:], strides=[1, 1, 1, 1], padding="VALID",
@@ -583,9 +587,16 @@ class Layer():
 			raise
 
 		# apply the a and t infered in the E-step bottom-up inference on the up-sampled intermediate image
+		latents_unpooled_no_mask_shp = self.latents_unpooled_no_mask.get_shape()
+		masked_mat_shp = self.masked_mat.get_shape()
 		if self.latents_unpooled_no_mask.get_shape()!=self.masked_mat.get_shape():
-			self.latents_unpooled_no_mask = tf.concat([self.latents_unpooled_no_mask, tf.expand_dims(self.latents_unpooled_no_mask[:,:,-1,:],2)],2)
-			self.latents_unpooled_no_mask_lab = tf.concat([self.latents_unpooled_no_mask_lab, tf.expand_dims(self.latents_unpooled_no_mask_lab[:,:,-1,:],2)],2)
+			print "entering"
+			if latents_unpooled_no_mask_shp[2] != masked_mat_shp[2]:
+				self.latents_unpooled_no_mask = tf.concat([self.latents_unpooled_no_mask, tf.expand_dims(self.latents_unpooled_no_mask[:,:,-1,:],2)],2)
+				self.latents_unpooled_no_mask_lab = tf.concat([self.latents_unpooled_no_mask_lab, tf.expand_dims(self.latents_unpooled_no_mask_lab[:,:,-1,:],2)],2)
+			if latents_unpooled_no_mask_shp[3] != masked_mat_shp[3]:
+				self.latents_unpooled_no_mask = tf.concat([self.latents_unpooled_no_mask, tf.expand_dims(self.latents_unpooled_no_mask[:,:,:,-1],3)],3)
+				self.latents_unpooled_no_mask_lab = tf.concat([self.latents_unpooled_no_mask_lab, tf.expand_dims(self.latents_unpooled_no_mask_lab[:,:,:,-1],3)],3)
 		self.latents_unpooled = self.latents_unpooled_no_mask * self.masked_mat * self.prun_mat
 		self.latents_unpooled_lab = self.latents_unpooled_no_mask_lab * self.masked_mat_lab * self.prun_mat
 		print self.latents_unpooled.get_shape()
