@@ -149,7 +149,7 @@ class Model():
 				self.x_lab = tf.placeholder(tf.float32,[self.batch_size, Cin, H, W],'x_lab')
 				# self.x_unl = tf.placeholder(tf.float32,[self.batch_size, Cin, H, W],'x_unl')
 				# self.x_clean = tf.placeholder(tf.float32,[self.batch_size, Cin, H, W],'x_unl')
-				
+
 				layer = Layer(
 					data_4D_lab=self.x_lab,
 					# data_4D_unl=self.x_unl,
@@ -188,22 +188,25 @@ class Model():
 	def Compile(self):
 		# regression layer for softmax
 		print self.layers[-1].D,"fjdfdsjfsddsjkhdsjkfksd", self.num_class
-		self.RegressionInSoftmax = HiddenLayerInSoftmax(input_lab=tf.reshape(self.layer.output_lab,[self.batch_size,-1]),
-														# input_unl=tf.reshape(self.layer.output,[self.batch_size,-1]),
-														input_unl= None,
-														# input_clean=tf.reshape(self.layer.output_clean,[self.batch_size,-1]), 
-														input_clean= None,
-														n_in = self.layers[-1].K, n_out=self.num_class, W_init=None, b_init=None)
+		with tf.name_scope("ffl"):
+			self.RegressionInSoftmax = HiddenLayerInSoftmax(input_lab=tf.reshape(self.layer.output_lab,[self.batch_size,-1]),
+															# input_unl=tf.reshape(self.layer.output,[self.batch_size,-1]),
+															input_unl= None,
+															# input_clean=tf.reshape(self.layer.output_clean,[self.batch_size,-1]), 
+															input_clean= None,
+															n_in = self.layers[-1].K, n_out=self.num_class, W_init=None, b_init=None)
 
-		softmax_input_lab = self.RegressionInSoftmax.output_lab
-		softmax_input = self.RegressionInSoftmax.output
-		softmax_input_clean = self.RegressionInSoftmax.output_clean
-		print softmax_input_lab.get_shape(),"sdfsdfds"
-		# softmax nonlinearity for object recognition
-		self.softmax_layer_nonlin = SoftmaxNonlinearity(input_lab=softmax_input_lab, input_unl=softmax_input,input_clean=softmax_input_clean)
-		print self.softmax_layer_nonlin.y_pred_lab.get_shape(),"glf"
-		# build Top-Down pass
-		self._Build_TopDown_End_to_End()
+			softmax_input_lab = self.RegressionInSoftmax.output_lab
+			softmax_input = self.RegressionInSoftmax.output
+			softmax_input_clean = self.RegressionInSoftmax.output_clean
+			print softmax_input_lab.get_shape(),"sdfsdfds"
+			# softmax nonlinearity for object recognition
+			self.softmax_layer_nonlin = SoftmaxNonlinearity(input_lab=softmax_input_lab, input_unl=softmax_input,input_clean=softmax_input_clean)
+			print self.softmax_layer_nonlin.y_pred_lab.get_shape(),"glf"
+		
+		with tf.name_scope("reconstruction"):
+			# build Top-Down pass
+			self._Build_TopDown_End_to_End()
 
 		# build the cost function for the model
 		self.BuildCost()
@@ -239,60 +242,68 @@ class Model():
 		Build the costs which are minimized during training
 		:return:
 		'''
+
 		# compute the classification error
-		# self.classification_error = self.softmax_layer_nonlin.errors(self.y_lab)
-		self.classification_error = 0.0
+		with tf.name_scope("accuracy"):
+			self.classification_error = self.softmax_layer_nonlin.errors(self.y_lab)
+		# self.classification_error = 0.0
 		# print "classification_error_got"
 		# supervised learning cost is the cross-entropy
-		self.supervised_cost = self.softmax_layer_nonlin.negative_log_likelihood(tf.one_hot(self.y_lab, self.num_class))
+		with tf.name_scope("cost"):
+			self.supervised_cost = self.softmax_layer_nonlin.negative_log_likelihood(tf.one_hot(self.y_lab, self.num_class))
 
-		if self.is_sup: # is sup, use only the cross-entropy cost
-			self.cost = self.supervised_cost
-		else: # if semi-sup, use cross-entropy cost + reconstruction cost + KL penalty + NN penalty
-			# Build the NN penalty
-			self.sign_cost_unl = 0.0
-			self.sign_cost_lab = 0.0
-			for i in xrange(self.N_layers):
-				self.sign_cost_unl += tf.reduce_mean(tf.nn.relu(-self.layers[i].latents_unpooled_no_mask) ** 2)
-				self.sign_cost_lab += tf.reduce_mean(tf.nn.relu(-self.layers[i].latents_unpooled_no_mask_lab) ** 2)
+			if self.is_sup: # is sup, use only the cross-entropy cost
+				
+				self.cost = self.supervised_cost
+				tf.summary.scalar("cost", self.cost)		
+			else: # if semi-sup, use cross-entropy cost + reconstruction cost + KL penalty + NN penalty
+				# Build the NN penalty
+				self.sign_cost_unl = 0.0
+				self.sign_cost_lab = 0.0
+				for i in xrange(self.N_layers):
+					self.sign_cost_unl += tf.reduce_mean(tf.nn.relu(-self.layers[i].latents_unpooled_no_mask) ** 2)
+					self.sign_cost_lab += tf.reduce_mean(tf.nn.relu(-self.layers[i].latents_unpooled_no_mask_lab) ** 2)
 
 
-			# Build the reconstruction cost
-			self.unsupervised_cost_unl = tf.reduce_mean((self.layers[-1].data_4D_unl_clean - self.layers[-1].data_reconstructed) ** 2)
-			self.unsupervised_cost_lab = tf.reduce_mean(
-				(self.layers[-1].data_4D_lab - self.layers[-1].data_reconstructed_lab) ** 2)
+				# Build the reconstruction cost
+				self.unsupervised_cost_unl = tf.reduce_mean((self.layers[-1].data_4D_unl_clean - self.layers[-1].data_reconstructed) ** 2)
+				self.unsupervised_cost_lab = tf.reduce_mean(
+					(self.layers[-1].data_4D_lab - self.layers[-1].data_reconstructed_lab) ** 2)
 
-			# KL penalty
-			self.KLD_cost_unl = -tf.reduce_mean(tf.reduce_sum(tf.log(np.float32(self.num_class) * self.softmax_layer_nonlin.gammas + 1e-8)
-										 * self.softmax_layer_nonlin.gammas, axis=1))
+				# KL penalty
+				self.KLD_cost_unl = -tf.reduce_mean(tf.reduce_sum(tf.log(np.float32(self.num_class) * self.softmax_layer_nonlin.gammas + 1e-8)
+											 * self.softmax_layer_nonlin.gammas, axis=1))
 
-			self.KLD_cost_lab = -tf.reduce_mean(tf.reduce_sum(tf.log(np.float32(self.num_class) * self.softmax_layer_nonlin.gammas_lab + 1e-8)
-										  * self.softmax_layer_nonlin.gammas_lab, axis=1))
+				self.KLD_cost_lab = -tf.reduce_mean(tf.reduce_sum(tf.log(np.float32(self.num_class) * self.softmax_layer_nonlin.gammas_lab + 1e-8)
+											  * self.softmax_layer_nonlin.gammas_lab, axis=1))
 
-			# compute the costs using both labeled data and unlabeled data, only unlabeled data, or only labeled data
-			if self.cost_mode == 'both':
-				self.sign_cost = 0.5 * self.sign_cost_unl + 0.5 * self.sign_cost_lab
-				self.KLD_cost = 0.5 * self.KLD_cost_unl + 0.5 * self.KLD_cost_lab
-				self.unsupervised_cost = 0.5 * self.unsupervised_cost_unl + 0.5 * self.unsupervised_cost_lab
-			elif self.cost_mode == 'unsup':
-				self.sign_cost = self.sign_cost_unl
-				self.KLD_cost = self.KLD_cost_unl
-				self.unsupervised_cost = self.unsupervised_cost_unl
-			else:
-				self.sign_cost = self.sign_cost_lab
-				self.KLD_cost = self.KLD_cost_lab
-				self.unsupervised_cost = self.unsupervised_cost_lab
+				# compute the costs using both labeled data and unlabeled data, only unlabeled data, or only labeled data
+				if self.cost_mode == 'both':
+					self.sign_cost = 0.5 * self.sign_cost_unl + 0.5 * self.sign_cost_lab
+					self.KLD_cost = 0.5 * self.KLD_cost_unl + 0.5 * self.KLD_cost_lab
+					self.unsupervised_cost = 0.5 * self.unsupervised_cost_unl + 0.5 * self.unsupervised_cost_lab
+				elif self.cost_mode == 'unsup':
+					self.sign_cost = self.sign_cost_unl
+					self.KLD_cost = self.KLD_cost_unl
+					self.unsupervised_cost = self.unsupervised_cost_unl
+				else:
+					self.sign_cost = self.sign_cost_lab
+					self.KLD_cost = self.KLD_cost_lab
+					self.unsupervised_cost = self.unsupervised_cost_lab
 
-			# Total cost
-			self.cost = self.supervised_cost \
-						+ self.reconst_weights * self.unsupervised_cost \
-						+ self.KL_coef * self.KLD_cost \
-						+ self.sign_cost_weight * self.sign_cost		
+				# Total cost
+				self.cost = self.supervised_cost \
+							+ self.reconst_weights * self.unsupervised_cost \
+							+ self.KL_coef * self.KLD_cost \
+							+ self.sign_cost_weight * self.sign_cost
+			
 
 
 	def Optimize(self, optimizer = "adam"):
-		optimizer = tf.train.AdamOptimizer()
-		self.train_ops = optimizer.minimize(self.cost)
+		with tf.name_scope("optimizer"):
+			optimizer = tf.train.AdamOptimizer()
+			self.train_ops = optimizer.minimize(self.cost)
+
 		# self.params = []
 		# for i in xrange(self.N_layers):
 		# 	self.params = self.params + self.layers[i].params

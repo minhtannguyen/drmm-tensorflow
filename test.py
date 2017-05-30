@@ -5,10 +5,15 @@ import numpy as np
 from layer import *
 from utils import *
 from model import *
-
+from tensorflow.examples.tutorials.mnist import input_data
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
+
+def reshape_data(data, to_shape = (1, 28, 28)):
+	data_sh = data.shape
+	return data.reshape((data_sh[0], to_shape[0], to_shape[1], to_shape[2]))
+mnist = input_data.read_data_sets('MNIST_data')
 # def change_shape(self, vec, input_shape):
 #     return T.repeat(vec, input_shape[2] * input_shape[3]).reshape(
 #         (input_shape[1], input_shape[2], input_shape[3]))
@@ -132,33 +137,50 @@ H = 28
 seed = 23
 
 model = Model(batch_size, Cin, W, H, seed, is_sup = True)
-model.add(noise_weight = 0.0, noise_std = 0.01, K = 32, W = 28, H = 28, M = 1, w = 3, h = 3, Ni = 100, Cin = 1, border_mode = "VALID")
-model.add(noise_weight = 0.0, noise_std = 0.01, K = 64, W = 64, H = 64, M = 1, w = 3, h = 3, Ni = 100, Cin = 1, border_mode = "VALID")
-model.add(noise_weight = 0.0, noise_std = 0.01, K = 100, W = 64, H = 64, M = 1, w = 3, h = 3, Ni = 100, Cin = 1, border_mode = "VALID")
-# print model.layer.
+model.add(noise_weight = 0.0, noise_std = 0.01, K = 1, W = 28, H = 28, M = 1, w = 3, h = 3, Ni = 100, Cin = 1, border_mode = "VALID")
+model.add(noise_weight = 0.0, noise_std = 0.01, K = 1, W = 64, H = 64, M = 1, w = 3, h = 3, Ni = 100, Cin = 1, border_mode = "VALID")
+model.add(noise_weight = 0.0, noise_std = 0.01, K = 1, W = 64, H = 64, M = 1, w = 3, h = 3, Ni = 100, Cin = 1, border_mode = "VALID")
+# print tf.trainable_variables()
+# print model.layer.output_lab.get_shape()
 model.Compile()
 model.Optimize()
+epochs = 1
+with  tf.Session() as sess:
+	sess.run(tf.global_variables_initializer())
+	summary_op = tf.summary.merge_all()
+	writer = tf.summary.FileWriter("logs")
+	writer.add_graph(sess.graph)
+	batch_no = 0
+	for epoch in range(epochs):
+		
+		# print
+		while True:
 
+			try:
+				train = mnist.train.next_batch(100)
+				# print train[1]
+				# break
+				feed_dict = {
+							model.x_lab : reshape_data(train[0]),
+							model.y_lab : train[1],
+							model.lr : 0.01,
+							model.momentum_bn : 0.99,
+							model.is_train : 1
+							# self.model.x_unl : self.reshape_data(train[0]),
+							# self.model.x_clean : self.reshape_data(train[0])
+				}
+				print "here"
+				_, train_loss, err, summ, probs = sess.run([model.train_ops, model.cost, model.classification_error, summary_op, model.softmax_layer_nonlin.gammas_lab], feed_dict = feed_dict)			
+				print "gogo"
+				writer.add_summary(summ, batch_no*100)
+				# err = sess.run(self.model.cost, feed_dict={self.model.x_lab: self.reshape_data(self.mnist.test.images), self.model.y_lab : self.mnist.test.labels})
+															# self.model.x_unl : None, self.model.x_clean : None											
+# self.																	})
+				print train_loss, err,batch_no*100
+				print "train error after training %s batches is %s".format(batch_no, train_loss)
+				batch_no += 1
+
+			except Exception as e:
+				raise e	
+	
 print model.layer.output_lab.get_shape().as_list()
-import theano
-import theano.tensor as T
-import tensorflow as tf
-import numpy as np
-
-
-def change_shape(self, vec, input_shape):
-    return T.repeat(vec, input_shape[2] * input_shape[3]).reshape(
-        (input_shape[1], input_shape[2], input_shape[3]))
-
-v = 2.0*np.ones(10,3,8,8)
-# print v
-a = 2.0*tf.ones([10,3,8,8])
-# b = T.shared(value = v, borrow = True)
-c = T.scalar("fdfd")
-d = T.mean(v, axis = (0,2,3))
-e = T.var(v, axis = (0,2,3))
-f = theano.function([c], d)
-print f(1)
-now_mean, now_var = tf.nn.moments(a, axes=[0, 2, 3])
-with tf.Session() as sess:
-	print sess.run(d, feed_dict = {})

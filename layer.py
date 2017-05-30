@@ -85,7 +85,7 @@ class Layer():
 				 gamma_val_init=None, beta_val_init=None,
 				 prun_mat_init=None, prun_synap_mat_init=None,
 				 mean_bn_init=None, var_bn_init=None,
-				 pool_t_mode='max_t', border_mode='VALID', nonlin='abs', 
+				 pool_t_mode='max_t', border_mode='VALID', nonlin='relu', 
 				 mean_pool_size=[2, 2],
 				 max_condition_number=1.e3,
 				 weight_init="xavier",
@@ -224,7 +224,7 @@ class Layer():
 		if self.lambdas_t_val_init is None:
 			if self.weight_init == "xavier":
 				initialised = 1
-				self.lambdas_t = tf.get_variable(shape = [self.K, self.D, self.M],name = "lambdas_t",  initializer = tf.contrib.layers.xavier_initializer())
+				self.lambdas_t = tf.get_variable(shape = [self.K, self.D, self.M],name = "lambdas_t"+self.name,  initializer = tf.contrib.layers.xavier_initializer())
 			else:
 				lambdas_t_value = np.random.randn(self.K, self.D, self.M) / \
 								np.sqrt(self.max_condition_number)
@@ -389,26 +389,41 @@ class Layer():
 		# find activations survive after max over t
 		if self.pool_t_mode == 'max_t' and self.nonlin == 'relu':
 			print('Do max over t')
-			self.to_see = tf.transpose(tf.image.resize_nearest_neighbor(tf.nn.max_pool(tf.transpose(latents, [0,2,3,1]), [1, 2, 2, 1], strides=[1,2,2,1], padding='VALID'),
-															[self.latents_shape[2], self.latents_shape[3]]),[0,3,1,2])
-			max_over_t_mask = tf.gradients(tf.reduce_sum(tf.nn.max_pool(tf.transpose(latents, [0,2,3,1]), [1, 2, 2, 1], strides=[1,2,2,1], padding='VALID')), latents)[0]
+			# self.to_see = tf.transpose(tf.image.resize_nearest_neighbor(tf.nn.max_pool(tf.transpose(latents, [0,2,3,1]), [1, 2, 2, 1], strides=[1,2,2,1], padding='VALID'),
+															# [self.latents_shape[2], self.latents_shape[3]]),[0,3,1,2])
+			# # self.to_see = tf.greater_equal(latents,
+			# 								   tf.transpose(tf.image.resize_nearest_neighbor(tf.nn.max_pool(tf.transpose(latents, [0,2,3,1]), [1, 2, 2, 1], strides=[1,2,2,1], padding='VALID'),
+			# 												[self.latents_shape[2], self.latents_shape[3]]),
+			# 												[0,3,1,2]))
+			self.to_see = latents
+			# max_over_t_mask = tf.gradients(tf.reduce_sum(tf.nn.max_pool(tf.transpose(latents, [0,2,3,1]), [1, 2, 2, 1], strides=[1,2,2,1], padding='VALID')), latents)[0]
 			# max_over_t_mask = tf.equal(latents,
 			# 								   tf.transpose(tf.image.resize_nearest_neighbor(tf.nn.max_pool(tf.transpose(latents, [0,2,3,1]), [1, 2, 2, 1], strides=[1,2,2,1], padding='VALID'),
 			# 												[self.latents_shape[2], self.latents_shape[3]]),
 			# 												[0,3,1,2]))
+			max_over_t_mask = tf.equal(latents,
+											   tf.transpose(tf.image.resize_nearest_neighbor(tf.nn.max_pool(tf.transpose(latents, [0,2,3,1]), [1, 2, 2, 1], strides=[1,2,2,1], padding='VALID'),
+															[self.latents_shape[2], self.latents_shape[3]]),
+															[0,3,1,2]))
 			max_over_t_mask = tf.cast(max_over_t_mask, dtype=tf.float32)
+			self.ttt = max_over_t_mask
 		elif self.pool_t_mode == 'max_t' and self.nonlin == 'abs': # still in the beta state
 			# print('Do max over t')
 			latents_abs = tf.abs(latents)
-			# self.latents_abs = latents_abs
-			max_over_t_mask = tf.gradients(tf.reduce_sum(tf.nn.max_pool(tf.transpose(latents_abs, [0,2,3,1]), [1, 2, 2, 1], strides=[1,2,2,1], padding='VALID')), latents_abs)[0]
+			self.latents_abs = latents_abs
+			# max_over_t_mask = tf.gradients(tf.reduce_sum(tf.nn.max_pool(tf.transpose(latents_abs, [0,2,3,1]), [1, 2, 2, 1], strides=[1,2,2,1], padding='VALID')), latents_abs)[0]
 			# self.latents_abs = max_over_t_mask
 			# max_over_t_mask = tf.equal(latents_abs,
 			# 								   tf.transpose(tf.image.resize_nearest_neighbor(tf.nn.max_pool(tf.transpose(latents_abs, [0, 2, 3, 1]), [1, 2, 2, 1], strides=[1, 2, 2, 1], padding='VALID'),
 			# 									   [self.latents_shape[2], self.latents_shape[3]]),
 			# 												[0, 3, 1, 2]))
 			# max_over_t_mask = tf.cast(latents_abs, dtype=tf.float32)
+			max_over_t_mask = tf.equal(latents_abs,
+											   tf.transpose(tf.image.resize_nearest_neighbor(tf.nn.max_pool(tf.transpose(latents_abs, [0, 2, 3, 1]), [1, 2, 2, 1], strides=[1, 2, 2, 1], padding='VALID'),
+												   [self.latents_shape[2], self.latents_shape[3]]),
+															[0, 3, 1, 2]))
 			max_over_t_mask = tf.cast(max_over_t_mask, dtype=tf.float32)
+			self.ttt = max_over_t_mask
 		else:
 			# print('No max over t')
 			# compute latents masked by a
@@ -558,63 +573,72 @@ class Layer():
 		# Reconstruct the images to compute the complete-data log-likelihood
 		#
 		if tf.contrib.framework.is_tensor(mu_cg) == False:
-			mu_cg = tf.convert_to_tensor(mu_cg, dtype = tf.float32)
+			if mu_cg != None:
+				mu_cg = tf.convert_to_tensor(mu_cg, dtype = tf.float32)
 			mu_cg_lab = tf.convert_to_tensor(mu_cg_lab, dtype = tf.float32)
-		self.a = tf.tile(mu_cg,multiples = [1,1,2,1])
+		# self.a = tf.tile(mu_cg,multiples = [1,1,2,1])
 		# Up-sample the latent presentations
 
-		mu_cg_sh = mu_cg.get_shape().as_list()
+		mu_cg_sh = mu_cg_lab.get_shape().as_list()
 		# self.a = tf.reshape(tf.tile(tf.reshape(mu_cg,[mu_cg_sh[0],-1,1,mu_cg_sh[3]]),[1,1,2,1]),[mu_cg_sh[0],mu_cg_sh[1],-1,mu_cg_sh[3]])
-		self.a = self._repeat(mu_cg, mu_cg_sh, [1,1,2,1])
+		# self.a = self._repeat(mu_cg, mu_cg_sh, [1,1,2,1])
 		# self.a = tf.reshape(tf.tile(tf.reshape(mu_cg,[mu_cg_sh[0],-1,1,mu_cg_sh[3]]),[1,1,2,1]),[mu_cg_sh[0],mu_cg_sh[1],-1,mu_cg_sh[3]])
 		if self.pool_t_mode == 'max_t':
-			latents_unpooled_no_mask = self._repeat(mu_cg, mu_cg_sh,[1,1,2,1])
-			self.latents_unpooled_no_mask = self._repeat1(latents_unpooled_no_mask, latents_unpooled_no_mask.get_shape().as_list(), [1,1,1,2])
+			if mu_cg != None:
+				latents_unpooled_no_mask = self._repeat(mu_cg, mu_cg_sh,[1,1,2,1])
+				self.latents_unpooled_no_mask = self._repeat1(latents_unpooled_no_mask, latents_unpooled_no_mask.get_shape().as_list(), [1,1,1,2])
 
 			latents_unpooled_no_mask_lab = self._repeat(mu_cg_lab, mu_cg_sh,[1,1,2,1])
 			self.latents_unpooled_no_mask_lab = self._repeat1(latents_unpooled_no_mask_lab, latents_unpooled_no_mask_lab.get_shape().as_list(), [1,1,1,2])
 			
 		elif self.pool_t_mode == 'mean_t':
-			latents_unpooled_no_mask = self._repeat(mu_cg, mu_cg_sh,[1,1,self.mean_pool_size[0],1])
-			self.latents_unpooled_no_mask = self._repeat1(latents_unpooled_no_mask, latents_unpooled_no_mask.get_shape().as_list(), [1,1,1,self.mean_pool_size[1]])			
+			if mu_cg != None:
+				latents_unpooled_no_mask = self._repeat(mu_cg, mu_cg_sh,[1,1,self.mean_pool_size[0],1])
+				self.latents_unpooled_no_mask = self._repeat1(latents_unpooled_no_mask, latents_unpooled_no_mask.get_shape().as_list(), [1,1,1,self.mean_pool_size[1]])			
 
 			latents_unpooled_no_mask_lab = self._repeat(mu_cg_lab, mu_cg_sh,[1,1,self.mean_pool_size[0],1])
 			self.latents_unpooled_no_mask_lab = self._repeat1(latents_unpooled_no_mask_lab, latents_unpooled_no_mask_lab.get_shape().as_list(), [1,1,1,self.mean_pool_size[1]])			
 		elif self.pool_t_mode is None:
-			self.latents_unpooled_no_mask = mu_cg
+			if mu_cg != None:
+				self.latents_unpooled_no_mask = mu_cg
 			self.latents_unpooled_no_mask_lab = mu_cg_lab
 		else:
 			raise
 
 		# apply the a and t infered in the E-step bottom-up inference on the up-sampled intermediate image
-		latents_unpooled_no_mask_shp = self.latents_unpooled_no_mask.get_shape()
-		masked_mat_shp = self.masked_mat.get_shape()
-		if self.latents_unpooled_no_mask.get_shape()!=self.masked_mat.get_shape():
+		latents_unpooled_no_mask_shp = self.latents_unpooled_no_mask_lab.get_shape()
+		masked_mat_shp = self.masked_mat_lab.get_shape()
+		if latents_unpooled_no_mask_shp!=masked_mat_shp:
 			print "entering"
+
 			if latents_unpooled_no_mask_shp[2] != masked_mat_shp[2]:
-				self.latents_unpooled_no_mask = tf.concat([self.latents_unpooled_no_mask, tf.expand_dims(self.latents_unpooled_no_mask[:,:,-1,:],2)],2)
+				if mu_cg != None:
+					self.latents_unpooled_no_mask = tf.concat([self.latents_unpooled_no_mask, tf.expand_dims(self.latents_unpooled_no_mask[:,:,-1,:],2)],2)
 				self.latents_unpooled_no_mask_lab = tf.concat([self.latents_unpooled_no_mask_lab, tf.expand_dims(self.latents_unpooled_no_mask_lab[:,:,-1,:],2)],2)
 			if latents_unpooled_no_mask_shp[3] != masked_mat_shp[3]:
-				self.latents_unpooled_no_mask = tf.concat([self.latents_unpooled_no_mask, tf.expand_dims(self.latents_unpooled_no_mask[:,:,:,-1],3)],3)
+				if mu_cg != None:
+					self.latents_unpooled_no_mask = tf.concat([self.latents_unpooled_no_mask, tf.expand_dims(self.latents_unpooled_no_mask[:,:,:,-1],3)],3)
 				self.latents_unpooled_no_mask_lab = tf.concat([self.latents_unpooled_no_mask_lab, tf.expand_dims(self.latents_unpooled_no_mask_lab[:,:,:,-1],3)],3)
-		self.latents_unpooled = self.latents_unpooled_no_mask * self.masked_mat * self.prun_mat
+		if mu_cg != None:
+			self.latents_unpooled = self.latents_unpooled_no_mask * self.masked_mat * self.prun_mat
 		self.latents_unpooled_lab = self.latents_unpooled_no_mask_lab * self.masked_mat_lab * self.prun_mat
-		print self.latents_unpooled.get_shape()
+		# print self.latents_unpooled.get_shape()
 		# reconstruct/sample the image
 		self.lambdas_t_deconv = tf.transpose(tf.reshape(self.lambdas_t[:, :, 0],
 										 shape=(self.K, self.Cin, self.h, self.w)) * self.prun_synap_mat,[1, 0, 2, 3])
 		self.lambdas_t_deconv = self.lambdas_t_deconv[:, :, ::-1, ::-1]
 
 		if self.border_mode == 'VALID':
-			latents_unpooled, _ = self.pad_images(self.latents_unpooled,self.latents_unpooled.get_shape(),self.lambdas_t_deconv.get_shape(), "FULL")
-			# print _
-			self.data_reconstructed = tf.nn.conv2d(
-				data_format = "NCHW",
-				strides = [1,1,1,1],
-				input= latents_unpooled,
-				filter=tf.transpose(self.lambdas_t_deconv,[2,3,1,0]),
-				padding='VALID'
-			)
+			if mu_cg != None:
+				latents_unpooled, _ = self.pad_images(self.latents_unpooled,self.latents_unpooled.get_shape(),self.lambdas_t_deconv.get_shape(), "FULL")
+				# print _
+				self.data_reconstructed = tf.nn.conv2d(
+					data_format = "NCHW",
+					strides = [1,1,1,1],
+					input= latents_unpooled,
+					filter=tf.transpose(self.lambdas_t_deconv,[2,3,1,0]),
+					padding='VALID'
+				)
 			latents_unpooled_lab, _ = self.pad_images(self.latents_unpooled_lab,self.latents_unpooled_lab.get_shape(),self.lambdas_t_deconv.get_shape(), "FULL")
 			self.data_reconstructed_lab = tf.nn.conv2d(
 				data_format = "NCHW",
@@ -625,14 +649,15 @@ class Layer():
 			)
 
 		elif self.border_mode == 'HALF':
-			latents_unpooled, _ = self.pad_images(self.latents_unpooled,self.latents_unpooled.get_shape(),self.lambdas_t_deconv.get_shape(), "HALF")
-			self.data_reconstructed = tf.nn.conv2d(
-				data_format = "NCHW",
-				strides = [1,1,1,1],
-				input=latents_unpooled,
-				filter=tf.transpose(self.lambdas_t_deconv,[2,3,1,0]),
-				padding='VALID'
-			)
+			if mu_cg != None:
+				latents_unpooled, _ = self.pad_images(self.latents_unpooled,self.latents_unpooled.get_shape(),self.lambdas_t_deconv.get_shape(), "HALF")
+				self.data_reconstructed = tf.nn.conv2d(
+					data_format = "NCHW",
+					strides = [1,1,1,1],
+					input=latents_unpooled,
+					filter=tf.transpose(self.lambdas_t_deconv,[2,3,1,0]),
+					padding='VALID'
+				)
 			latents_unpooled_lab, _ = self.pad_images(self.latents_unpooled_lab,self.latents_unpooled_lab.get_shape(),self.lambdas_t_deconv.get_shape(), "HALF")
 			self.data_reconstructed_lab = tf.nn.conv2d(
 				data_format = "NCHW",
@@ -642,13 +667,14 @@ class Layer():
 				padding='VALID'
 			)
 		else:
-			self.data_reconstructed = tf.nn.conv2d(
-				data_format = "NCHW",
-				strides = [1,1,1,1],
-				input=self.latents_unpooled,
-				filter=tf.transpose(self.lambdas_t_deconv,[2,3,1,0]),
-				padding='VALID'
-			)
+			if mu_cg != None:
+				self.data_reconstructed = tf.nn.conv2d(
+					data_format = "NCHW",
+					strides = [1,1,1,1],
+					input=self.latents_unpooled,
+					filter=tf.transpose(self.lambdas_t_deconv,[2,3,1,0]),
+					padding='VALID'
+				)
 			self.data_reconstructed_lab = tf.nn.conv2d(
 				data_format = "NCHW",
 				strides = [1,1,1,1],
@@ -658,8 +684,10 @@ class Layer():
 			)
 
 		# compute reconstruction error
-		self.reconstruction_error = tf.reduce_mean((self.data_4D_unl_clean - self.data_reconstructed) ** 2)
+		if mu_cg != None:
+			self.reconstruction_error = tf.reduce_mean((self.data_4D_unl_clean - self.data_reconstructed) ** 2)
 		self.reconstruction_error_lab = tf.reduce_mean((self.data_4D_lab - self.data_reconstructed_lab) ** 2)
+		tf.summary.scalar("reconstruction_error", self.reconstruction_error_lab)
 
 	def pad_images(self, images, image_shape, filter_size, border_mode):
 		"""
