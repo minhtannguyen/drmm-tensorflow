@@ -101,7 +101,7 @@ class Model():
 		self.lr = tf.placeholder(tf.float32, [], name = "l_r")
 		# self.prun_threshold = tf.placeholder(tf.float32, [None], name = "prun_threshold")
 		# self.prun_weights = tf.placeholder(tf.float32, [None], name = prun_weights)
-		self.is_train = tf.placeholder(tf.bool, [], 'is_train')
+		self.is_train = tf.placeholder(tf.int32, [], 'is_train')
 		self.momentum_bn = tf.placeholder(tf.float32, [], 'momentum_bn')
 		# self.optimizer = tf.train.AdamOptimizer()
 
