@@ -101,9 +101,9 @@ class Model():
 		self.lr = tf.placeholder(tf.float32, [], name = "l_r")
 		# self.prun_threshold = tf.placeholder(tf.float32, [None], name = "prun_threshold")
 		# self.prun_weights = tf.placeholder(tf.float32, [None], name = prun_weights)
-		self.is_train = tf.placeholder(tf.float32, [], 'is_train')
+		self.is_train = tf.placeholder(tf.bool, [], 'is_train')
 		self.momentum_bn = tf.placeholder(tf.float32, [], 'momentum_bn')
-		self.optimizer = tf.train.AdamOptimizer()
+		# self.optimizer = tf.train.AdamOptimizer()
 
 		self._load_pretrained()
 
@@ -119,8 +119,10 @@ class Model():
 				# print shapes,"fffffff\n\n\n\n\n", self.N_layers
 				layer = Layer(
 					data_4D_lab=self.layer.output_lab,
-					data_4D_unl=self.layer.output,
-					data_4D_unl_clean=self.layer.output_clean,
+					# data_4D_unl=self.layer.output,
+					# data_4D_unl_clean=self.layer.output_clean,
+					data_4D_unl=None,
+					data_4D_unl_clean=None,
 					noise_weight=noise_weight,
 					noise_std=noise_std,
 					is_train=self.is_train, momentum_bn=self.momentum_bn,
@@ -145,13 +147,16 @@ class Model():
 			else:
 				#create x variables for the first time
 				self.x_lab = tf.placeholder(tf.float32,[self.batch_size, Cin, H, W],'x_lab')
-				self.x_unl = tf.placeholder(tf.float32,[self.batch_size, Cin, H, W],'x_unl')
-				self.x_clean = tf.placeholder(tf.float32,[self.batch_size, Cin, H, W],'x_unl')
-
+				# self.x_unl = tf.placeholder(tf.float32,[self.batch_size, Cin, H, W],'x_unl')
+				# self.x_clean = tf.placeholder(tf.float32,[self.batch_size, Cin, H, W],'x_unl')
+				
 				layer = Layer(
 					data_4D_lab=self.x_lab,
-					data_4D_unl=self.x_unl,
-					data_4D_unl_clean=self.x_clean,
+					# data_4D_unl=self.x_unl,
+					# data_4D_unl_clean=self.x_clean,
+					data_4D_unl=None,
+					data_4D_unl_clean=None,
+
 					noise_weight=noise_weight,
 					noise_std=noise_std,
 					is_train=self.is_train, momentum_bn=self.momentum_bn,
@@ -171,7 +176,7 @@ class Model():
 					is_prun=self.is_prun,
 					is_prun_synap=self.is_prun_synap,
 					is_dn=self.is_dn,
-					name = "drmm_layer_no_1"
+					name = "drmm_layer_no_0"
 				)
 
 			layer.EBottomUp()
@@ -184,8 +189,10 @@ class Model():
 		# regression layer for softmax
 		print self.layers[-1].D,"fjdfdsjfsddsjkhdsjkfksd", self.num_class
 		self.RegressionInSoftmax = HiddenLayerInSoftmax(input_lab=tf.reshape(self.layer.output_lab,[self.batch_size,-1]),
-														input_unl=tf.reshape(self.layer.output,[self.batch_size,-1]),
-														input_clean=tf.reshape(self.layer.output_clean,[self.batch_size,-1]), 
+														# input_unl=tf.reshape(self.layer.output,[self.batch_size,-1]),
+														input_unl= None,
+														# input_clean=tf.reshape(self.layer.output_clean,[self.batch_size,-1]), 
+														input_clean= None,
 														n_in = self.layers[-1].K, n_out=self.num_class, W_init=None, b_init=None)
 
 		softmax_input_lab = self.RegressionInSoftmax.output_lab
@@ -194,7 +201,7 @@ class Model():
 		print softmax_input_lab.get_shape(),"sdfsdfds"
 		# softmax nonlinearity for object recognition
 		self.softmax_layer_nonlin = SoftmaxNonlinearity(input_lab=softmax_input_lab, input_unl=softmax_input,input_clean=softmax_input_clean)
-		print self.softmax_layer_nonlin.y_pred_lab.get_shape()
+		print self.softmax_layer_nonlin.y_pred_lab.get_shape(),"glf"
 		# build Top-Down pass
 		self._Build_TopDown_End_to_End()
 
@@ -206,19 +213,23 @@ class Model():
 
 
 	def _Build_TopDown_End_to_End(self):
-		print tf.one_hot(self.softmax_layer_nonlin.y_pred, self.num_class).get_shape()
-		self.top_output = tf.matmul(tf.one_hot(self.softmax_layer_nonlin.y_pred, self.num_class),
-						tf.transpose(self.RegressionInSoftmax.W))
+		# print self.softmax_layer_nonlin.y_pred.get_shape(), "fds"
+		# print tf.one_hot(self.softmax_layer_nonlin.y_pred, self.num_class).get_shape()
+		# self.top_output = tf.matmul(tf.one_hot(self.softmax_layer_nonlin.y_pred, self.num_class),
+		# 				tf.transpose(self.RegressionInSoftmax.W))
 		self.top_output_lab = tf.matmul(tf.one_hot(self.softmax_layer_nonlin.y_pred_lab, self.num_class),
 								tf.transpose(self.RegressionInSoftmax.W))
-		print self.top_output.get_shape()
-		self.top_output = tf.reshape(self.top_output, [self.batch_size, -1, 1,1])
+		# print self.top_output.get_shape()
+		# self.top_output = tf.reshape(self.top_output, [self.batch_size, -1, 1,1])
 		self.top_output_lab = tf.reshape(self.top_output_lab, [self.batch_size, -1, 1,1])
 
-		self.layers[-1].ETopDown(mu_cg=self.top_output, mu_cg_lab=self.top_output_lab)
+		# self.layers[-1].ETopDown(mu_cg=self.top_output, mu_cg_lab=self.top_output_lab)
+		self.layers[-1].ETopDown(mu_cg=None, mu_cg_lab=self.top_output_lab)
 
 		for i in xrange(1, self.N_layers):
-			self.layers[self.N_layers - i - 1].ETopDown(mu_cg=self.layers[self.N_layers - i].data_reconstructed,
+			# self.layers[self.N_layers - i - 1].ETopDown(mu_cg=self.layers[self.N_layers - i].data_reconstructed,
+			# 											   mu_cg_lab=self.layers[self.N_layers - i].data_reconstructed_lab)
+			self.layers[self.N_layers - i - 1].ETopDown(mu_cg=None,
 														   mu_cg_lab=self.layers[self.N_layers - i].data_reconstructed_lab)
 	
 
@@ -229,7 +240,8 @@ class Model():
 		:return:
 		'''
 		# compute the classification error
-		self.classification_error = self.softmax_layer_nonlin.errors(self.y_lab)
+		# self.classification_error = self.softmax_layer_nonlin.errors(self.y_lab)
+		self.classification_error = 0.0
 		# print "classification_error_got"
 		# supervised learning cost is the cross-entropy
 		self.supervised_cost = self.softmax_layer_nonlin.negative_log_likelihood(tf.one_hot(self.y_lab, self.num_class))
@@ -279,7 +291,14 @@ class Model():
 
 
 	def Optimize(self, optimizer = "adam"):
-		self.optimizer.minimize(self.cost)
+		optimizer = tf.train.AdamOptimizer()
+		self.train_ops = optimizer.minimize(self.cost)
+		# self.params = []
+		# for i in xrange(self.N_layers):
+		# 	self.params = self.params + self.layers[i].params
+
+		# self.params = self.params + self.RegressionInSoftmax.params
+		# self.optimizer.minimize(self.cost, var_list = self.params)
 
 	def _load_pretrained(self):
 		pass
